@@ -80,22 +80,3 @@ py -3.11 -m venv myenv
 .\myenv\Scripts\python.exe -m pip install -r requirements.txt -c requirements-lock.txt
 Copy-Item examples\waypoints.txt waypoints.txt  # 僅在尚無自己的座標檔時執行
 ```
-
-## 上傳 GitHub
-
-`.gitignore` 已排除本機環境、搜尋紀錄、個人設定、座標、大型資料與封存檔。可直接在此目錄建立 Git repository 後提交原始碼：
-
-```powershell
-git init
-git add .
-git status --short
-git commit -m "Initial project setup"
-```
-
-也可在 PowerShell 執行以下指令產生 `dist/` 內的乾淨 ZIP；打包工具只收錄指定的程式、文件、測試與辨識範本。若透過 GitHub 網頁上傳，請先解壓縮，再上傳裡面的原始碼檔案。
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package.ps1
-```
-
-本機的 `local_archive/` 是整理時保留的舊程式與未使用圖片，不會進入 Git 或乾淨 ZIP。`myenv/`、`python11/` 保留供這台電腦使用，也不會上傳。
