@@ -114,6 +114,7 @@ class Scanner(threading.Thread):
             path, point, index, stamp = task
             record = dict(index=index, lat=point[0], lon=point[1], timestamp=stamp,
                           timing=self.config['timing'], session=self.session)
+            recognition_started = time.perf_counter()
             try:
                 found, name = self.recognizer(str(path), str(self.base/'mushroom_pics'), threshold=self.config['threshold'])
                 record.update(found=bool(found), target=name or '', path='')
@@ -129,6 +130,10 @@ class Scanner(threading.Thread):
                 self.errors += 1
                 record.update(found=False, target='', error=str(exc), path=str(path))
                 self.emit('log', text=f'第 {index} 點辨識失敗，保留截圖：{exc}')
+            record['recognition_seconds'] = round(time.perf_counter()-recognition_started, 3)
+            self.emit('recognition', seconds=record['recognition_seconds'])
+            if record['recognition_seconds'] >= self.config['interval']:
+                self.emit('log', text=f"第 {index} 點辨識耗時 {record['recognition_seconds']:.2f} 秒，已達截圖週期；留意待辨識數是否持續增加。")
             try:
                 with (self.folder/'results.jsonl').open('a', encoding='utf-8') as output:
                     output.write(json.dumps(record, ensure_ascii=False)+'\n')

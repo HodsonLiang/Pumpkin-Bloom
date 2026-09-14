@@ -55,6 +55,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Dependency conflicts detected; see pip check output above.' }
     & $venvPython -c "import tkinter, tkintermapview, PIL, cv2; from pymobiledevice3.tunneld.api import TUNNELD_DEFAULT_ADDRESS; import pikmin.scan_ui, pikmin.fly_ui; print('Application imports OK')"
     if ($LASTEXITCODE -ne 0) { throw 'Application dependency check failed.' }
+    & $venvPython -m pikmin.preflight
+    if ($LASTEXITCODE -ne 0) { throw 'Device command compatibility check failed. See the command error above.' }
     $localWaypoints = Join-Path $projectRoot 'waypoints.txt'
     if (-not (Test-Path -LiteralPath $localWaypoints)) {
         Copy-Item -LiteralPath (Join-Path $projectRoot 'examples\waypoints.txt') -Destination $localWaypoints

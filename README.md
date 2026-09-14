@@ -54,6 +54,15 @@ mushroom_pics/           實際使用的辨識範本
 
 ## 開發與驗證
 
+`pymobiledevice3 9.32.0` 的定位／截圖指令使用舊版 `csfield` API，因此固定搭配 `construct-typing 0.7.0`。`0.8.x` 雖然可能通過 `pip check`，載入 developer 指令仍會出現 `DataclassFieldError`。安裝程式現在會實際載入連線、設定定位、清除定位與截圖指令的 `--help`，不會操作手機。
+
+既有環境遇到此錯誤可重新執行 `Setup.bat`，或執行：
+
+```powershell
+.\myenv\Scripts\python.exe -m pip install -r requirements.txt -c requirements-lock.txt
+.\myenv\Scripts\python.exe -m pikmin.preflight
+```
+
 從專案根目錄執行：
 
 ```powershell
@@ -62,7 +71,7 @@ mushroom_pics/           實際使用的辨識範本
 .\myenv\Scripts\python.exe -m tests.check_scan_ui
 ```
 
-測試使用模擬裝置，不會操作手機。GitHub Actions 也會執行上述測試。`requirements.txt` 列出 4 個直接依賴；`requirements-lock.txt` 固定已在全新 Windows x64 / Python 3.11 環境驗證的完整依賴版本，安裝程式與 CI 會一起使用。更新依賴時請在乾淨環境重新解析、驗證並更新鎖定檔。
+測試使用模擬裝置，不會操作手機。GitHub Actions 也會執行上述測試。`requirements.txt` 列出直接依賴；`requirements-lock.txt` 固定已在全新 Windows x64 / Python 3.11 環境驗證的完整依賴版本，安裝程式與 CI 會一起使用。更新依賴時請在乾淨環境重新解析、驗證並更新鎖定檔。
 
 手動安裝（已安裝 Python 3.11）：
 

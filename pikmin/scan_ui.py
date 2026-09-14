@@ -54,6 +54,7 @@ class ScanApp:
         self.current_path = None
         self.session_folder = None
         self.completed = self.total = self.hits = self.errors = 0
+        self.recognition_seconds = None
         self.captured = self.processed = 0
         self.sent_point = None
         self.started = None
@@ -207,6 +208,7 @@ class ScanApp:
             preview.title.set(title)
             preview.draw()
         self.completed = self.hits = self.errors = 0
+        self.recognition_seconds = None
         self.captured = self.processed = 0
         self.sent_point = None
         self.total = len(points)
@@ -365,6 +367,8 @@ class ScanApp:
             self.next_index = event['next_index']
         elif kind == 'capture_error':
             self.errors = max(self.errors, event['errors'])
+        elif kind == 'recognition':
+            self.recognition_seconds = event['seconds']
         elif kind == 'log':
             self.append_log(event['text'])
         elif kind == 'done':
@@ -394,7 +398,8 @@ class ScanApp:
         if self.active and self.started:
             self.elapsed = time.monotonic()-self.started
         eta = f'{self.elapsed/self.completed*(self.total-self.completed)/60:.1f} 分' if self.completed and self.active else '—'
-        self.stats.set(f'已掃描 {self.completed} / {self.total}　命中 {self.hits}　錯誤 {self.errors}　待辨識 {pending}　已用 {self.elapsed/60:.1f} 分　掃描剩餘約 {eta}')
+        recognition = f'{self.recognition_seconds:.2f} 秒' if self.recognition_seconds is not None else '—'
+        self.stats.set(f'已掃描 {self.completed} / {self.total}　命中 {self.hits}　錯誤 {self.errors}　待辨識 {pending}　辨識 {recognition}　已用 {self.elapsed/60:.1f} 分　掃描剩餘約 {eta}')
         self.progress.configure(maximum=max(1, self.total), value=self.completed)
         self.root.after(100, self.poll)
 
