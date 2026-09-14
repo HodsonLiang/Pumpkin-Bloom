@@ -73,6 +73,7 @@ class FakeGPSApp:
         self.listbox = tk.Listbox(side, height=6, font=('Consolas', 10), exportselection=False)
         self.listbox.pack(fill='both', expand=True)
         self.listbox.bind('<<ListboxSelect>>', self.focus_point)
+        self.listbox.bind('<Button-3>', self.list_context)
         ttk.Button(side, text='還原真實定位', command=lambda: self.send('reset')).pack(fill='x', pady=(10, 0))
         right = ttk.Frame(content)
         right.pack(side='left', fill='both', expand=True)
@@ -87,6 +88,7 @@ class FakeGPSApp:
         self.map_widget.set_zoom(15)
         self.current_marker = self.map_widget.set_marker(*self.snapshot['position'], text='目前模擬位置', marker_color_outside='#245a3d')
         self.map_widget.add_right_click_menu_command(label='加入路線標點', command=self.add_map, pass_coords=True)
+        self.map_widget.canvas.bind('<Button-3>', self.map_context)
         ttk.Label(right, text='右鍵新增標點；點左側清單可定位。ETA 包含傳送間隔與中途停留，未含裝置延遲。', wraplength=650).pack(anchor='w', pady=8)
         self.position_label = tk.StringVar()
         ttk.Label(right, textvariable=self.position_label).pack(anchor='w')
@@ -98,6 +100,40 @@ class FakeGPSApp:
     def send(self, kind, value=None):
         if not self.closing:
             self.commands.put((kind, value))
+
+    def map_context(self, event):
+        canvas = self.map_widget.canvas
+        nearby = set(canvas.find_overlapping(event.x-4, event.y-4, event.x+4, event.y+4))
+        uid = next((identifier for identifier, marker in self.markers.items()
+                    if nearby.intersection({marker.polygon, marker.big_circle, marker.canvas_text, marker.canvas_icon})), None)
+        if uid is None:
+            self.map_widget.mouse_right_click(event)
+            return 'break'
+        menu = tk.Menu(self.root, tearoff=False)
+        menu.add_command(label=f'刪除標點 {uid}（暫停原地）', command=lambda: self.send('remove', uid))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+        return 'break'
+
+    def list_context(self, event):
+        index = self.listbox.nearest(event.y)
+        if not 0 <= index < len(self.snapshot['points']):
+            return 'break'
+        bounds = self.listbox.bbox(index)
+        if not bounds or not bounds[1] <= event.y <= bounds[1]+bounds[3]:
+            return 'break'
+        uid = self.snapshot['points'][index][0]
+        self.listbox.selection_clear(0, 'end')
+        self.listbox.selection_set(index)
+        menu = tk.Menu(self.root, tearoff=False)
+        menu.add_command(label=f'刪除標點 {uid}（暫停原地）', command=lambda: self.send('remove', uid))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+        return 'break'
 
     def apply_settings(self):
         try:

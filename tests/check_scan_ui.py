@@ -3,7 +3,7 @@ import io
 from pathlib import Path
 import tempfile
 import tkinter as tk
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 from PIL import Image
 import tkintermapview
 from pikmin.scan_ui import ScanApp
@@ -31,19 +31,58 @@ def main():
             image.save(path)
             app.handle(dict(kind='screenshot', content=stream.getvalue(), point=(25, 121), index=1,
                             timestamp='2026-09-14T12:00:00', path=str(path)))
-            record = dict(index=1, target='target.png', lat=25, lon=121, timestamp='2026-09-14T12:00:00',
+            target_name = next((Path(__file__).resolve().parent.parent/'mushroom_pics').glob('*.png')).name
+            record = dict(index=1, target=target_name, lat=25, lon=121, timestamp='2026-09-14T12:00:00',
                           path=str(path), found=True, timing='pipeline', session='test')
             app.handle(dict(kind='result', record=record, hits=1, errors=0, processed=1))
             root.update_idletasks()
             assert len(app.markers)==1 and len(app.table.get_children())==1
             assert app.current_preview.original.size == (100, 200)
             assert app.hit_preview.original.size == (100, 200)
-            path.unlink()
+            assert app.current_marker.icon is None
+            assert app.sent_marker.icon is None
+            assert app.markers[0].icon is app.icon_for(target_name)
+            app.add_record(record)
+            assert len(app.records) == 1, 'History/live duplicate was not deduplicated'
+            app.result_folder = Path(folder)
+            second_path = Path(folder)/'second.png'
+            image.save(second_path)
+            app.add_record({**record, 'path': str(second_path), 'index': 2})
+            app.select_all()
+            assert len(app.table.selection()) == 2
+            app.delete_selected()
+            assert not path.exists() and not second_path.exists()
+            assert len(list((Path(folder)/'.trash').rglob('*.png'))) == 2
+            assert not app.records and not app.markers and not app.table.get_children()
             app.current_preview.draw()
             assert app.current_preview.photo is not None
+        app.active = True
+        app.scanner = Mock()
+        app.end_index = 3
+        with patch.object(app, 'run_manual') as dispatch:
+            app.request_teleport((25.1, 121.1))
+            app.scanner.stop_event.set.assert_called_once()
+            dispatch.assert_not_called()
+            app.handle(dict(kind='done', text='已停止', next_index=2, hits=0, errors=0))
+            dispatch.assert_called_once_with('set', (25.1, 121.1))
+        app.manual_device = Mock(process=None)
+        app.run_manual('set', (25.2, 121.2))
+        event = app.events.get(timeout=3)
+        assert event['kind'] == 'manual_done' and event['error'] is None
+        app.handle(event)
+        app.manual_device.send.assert_called_once_with((25.2, 121.2))
+        assert app.manual_active and not app.manual_busy
+        with patch.object(app, 'run_manual') as dispatch:
+            app.start()
+            dispatch.assert_called_once_with('reset')
+        with patch.object(app, 'start') as restart:
+            app.handle(dict(kind='manual_done', operation='reset', point=None, error=None))
+            restart.assert_called_once()
+        assert not app.manual_active
         print('Offline scan UI passed: search/sent/hit markers, selection, both previews, image retained after deletion.')
         print('Requested layout:', root.winfo_reqwidth(), root.winfo_reqheight())
     finally:
+        app.manual_executor.shutdown(wait=True)
         app.map_widget.destroy()
         root.destroy()
 

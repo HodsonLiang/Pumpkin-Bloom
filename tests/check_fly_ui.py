@@ -1,6 +1,6 @@
 """Offline UI smoke check: real Tk/map widgets, no device calls or tile downloads."""
 import tkinter as tk
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 import tkintermapview
 from pikmin.fly_ui import FakeGPSApp
 
@@ -27,6 +27,20 @@ def main():
         app.render(c.snapshot())
         assert list(app.markers) == [3]
         assert not c.route.running
+        app.markers[3].canvas_icon = 4321
+        event = Mock(x=20, y=20, x_root=40, y_root=40)
+        with patch.object(app.map_widget.canvas, 'find_overlapping', return_value=(4321,)), patch('pikmin.fly_ui.tk.Menu') as menu:
+            app.map_context(event)
+            command = menu.return_value.add_command.call_args.kwargs['command']
+            command()
+        while not app.commands.empty():
+            kind, value = app.commands.get_nowait()
+            c.command(kind, value)
+        app.render(c.snapshot())
+        assert not app.markers and app.path is None
+        with patch.object(app.map_widget.canvas, 'find_overlapping', return_value=()), patch.object(app.map_widget, 'mouse_right_click') as original_menu:
+            app.map_context(event)
+            original_menu.assert_called_once_with(event)
         print('Offline UI check passed: real map, route line, unique labels, clear, re-add.')
         print('Requested layout:', root.winfo_reqwidth(), root.winfo_reqheight())
     finally:

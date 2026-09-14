@@ -12,6 +12,7 @@ from tkinter.scrolledtext import ScrolledText
 from PIL import Image, ImageTk, ImageOps
 import tkintermapview
 from .scan_engine import BASE, DEFAULTS, Scanner, prepare_config
+from .scan_actions import ScanActions
 
 
 class Preview(ttk.Frame):
@@ -41,7 +42,7 @@ class Preview(ttk.Frame):
         self.canvas.create_image(self.canvas.winfo_width()/2, self.canvas.winfo_height()/2, image=self.photo)
 
 
-class ScanApp:
+class ScanApp(ScanActions):
     def __init__(self, root, config=None):
         self.root = root
         self.events = queue.Queue()
@@ -61,6 +62,7 @@ class ScanApp:
         self.elapsed = 0.
         self.active = False
         self.next_index = None
+        self.init_actions()
         root.title('Pikmin · 目標搜尋')
         root.geometry('1380x900')
         root.minsize(1100, 760)
@@ -111,6 +113,7 @@ class ScanApp:
         ttk.Checkbutton(controls, text='跟隨搜尋位置', variable=self.follow).pack(side='left', padx=12)
         ttk.Button(controls, text='回到搜尋位置', command=self.center).pack(side='left')
         ttk.Button(controls, text='結果資料夾', command=self.open_folder).pack(side='right')
+        self.manual_bar(outer)
         self.stats = tk.StringVar(value='已掃描 0 / 0　命中 0　錯誤 0')
         ttk.Label(outer, textvariable=self.stats, font=('Microsoft JhengHei UI', 12, 'bold')).pack(anchor='w', pady=(8, 4))
         self.progress = ttk.Progressbar(outer)
@@ -129,7 +132,8 @@ class ScanApp:
         self.map_widget.pack(fill='both', expand=True)
         self.map_widget.set_position(25.033964, 121.564468)
         self.map_widget.set_zoom(8)
-        ttk.Label(map_frame, text='藍：搜尋點　橘：最後送出定位　綠：命中（可點選）', wraplength=600).pack(anchor='w', pady=4)
+        self.map_widget.add_right_click_menu_command(label='傳送到這裡（先停止掃描）', command=self.request_teleport, pass_coords=True)
+        ttk.Label(map_frame, text='蘑菇：目標類型　藍字：搜尋點　橘字：送出定位；右鍵可傳送', wraplength=600).pack(anchor='w', pady=4)
         self.current_preview = Preview(top, '目前截圖 · 等待搜尋')
         self.current_preview.grid(row=0, column=1, sticky='nsew')
         self.hit_preview = Preview(top, '命中截圖 · 點選下方結果')
@@ -140,18 +144,22 @@ class ScanApp:
         body.add(bottom, weight=1)
         gallery = ttk.Frame(bottom, padding=6)
         logs = ttk.Frame(bottom)
-        bottom.add(gallery, text='  本次命中結果  ')
+        bottom.add(gallery, text='  找到的目標  ')
         bottom.add(logs, text='  執行紀錄  ')
         bar = ttk.Frame(gallery)
         bar.pack(fill='x', pady=(0, 4))
         ttk.Button(bar, text='開啟原始截圖', command=self.open_selected).pack(side='left')
         ttk.Button(bar, text='複製選取座標', command=self.copy_coords).pack(side='left', padx=6)
         ttk.Button(bar, text='匯出命中 CSV', command=self.export).pack(side='left')
-        ttk.Label(bar, text='雙擊圖片可開原圖；新搜尋會清空畫面，已儲存結果會保留。').pack(side='left', padx=10)
+        ttk.Button(bar, text='傳送到選取目標', command=self.teleport_selected).pack(side='left', padx=6)
+        self.load_button = ttk.Button(bar, text='載入歷史結果', command=self.load_history)
+        self.load_button.pack(side='left')
+        ttk.Button(bar, text='全選', command=self.select_all).pack(side='left', padx=6)
+        ttk.Button(bar, text='刪除選取（移至回收區）', command=self.delete_selected).pack(side='left')
         table_frame = ttk.Frame(gallery)
         table_frame.pack(fill='both', expand=True)
         columns = ('index', 'target', 'coords', 'time')
-        self.table = ttk.Treeview(table_frame, columns=columns, show='headings', height=5, selectmode='browse')
+        self.table = ttk.Treeview(table_frame, columns=columns, show='headings', height=5, selectmode='extended')
         for key, title, width in zip(columns, ['座標序號', '目標', '緯度, 經度', '截圖時間'], [90, 200, 260, 200]):
             self.table.heading(key, text=title)
             self.table.column(key, width=width)
@@ -160,6 +168,8 @@ class ScanApp:
         scroll.pack(side='right', fill='y')
         self.table.pack(fill='both', expand=True)
         self.table.bind('<<TreeviewSelect>>', self.select_hit)
+        self.table.bind('<Control-a>', lambda _: (self.select_all(), 'break')[-1])
+        self.table.bind('<Delete>', lambda _: self.delete_selected())
         self.log = ScrolledText(logs, height=6, state='disabled', font=('Consolas', 10))
         self.log.pack(fill='both', expand=True)
         ttk.Label(outer, text='目前截圖是最近一次擷取，並非即時串流。提前傳送模式沿用原本延遲假設，標記為搜尋指定座標，並非手機 GPS 回讀。', wraplength=1320).pack(anchor='w', pady=(6, 0))
@@ -180,7 +190,11 @@ class ScanApp:
             widget.configure(state='disabled' if busy else ('readonly' if isinstance(widget, ttk.Combobox) else 'normal'))
 
     def start(self):
-        if self.active or self.closing:
+        if self.active or self.closing or self.manual_busy:
+            return
+        if self.manual_active:
+            self.pending_start = True
+            self.run_manual('reset')
             return
         try:
             values = {key: var.get() for key, var in self.fields.items()}
@@ -193,17 +207,12 @@ class ScanApp:
             return
         self.last_config = config
         self.end_index = config['start_index']+len(points)
-        self.records.clear()
-        for marker in self.markers:
-            marker.delete()
-        self.markers.clear()
         for marker in (self.current_marker, self.sent_marker):
             if marker:
                 marker.delete()
         self.current_marker = self.sent_marker = None
         self.current_point = self.current_path = None
-        self.table.delete(*self.table.get_children())
-        for preview, title in ((self.current_preview, '目前截圖 · 等待搜尋'), (self.hit_preview, '命中截圖 · 點選下方結果')):
+        for preview, title in ((self.current_preview, '目前截圖 · 等待搜尋'),):
             preview.original = None
             preview.title.set(title)
             preview.draw()
@@ -221,10 +230,16 @@ class ScanApp:
         self.status.set('正在啟動搜尋…')
 
     def stop(self):
+        self.pending_teleport = None
+        self.pending_start = False
         if self.active:
             self.scanner.stop_event.set()
             self.stop_button.configure(state='disabled')
             self.status.set('正在停止 · 等待目前指令結束並儲存辨識結果')
+        elif self.manual_busy:
+            self.pending_reset = True
+        elif self.manual_active:
+            self.run_manual('reset')
 
     def resume(self):
         if self.next_index is not None:
@@ -254,7 +269,7 @@ class ScanApp:
 
     def selected(self):
         selection = self.table.selection()
-        return self.records[int(selection[0])] if selection else None
+        return self.records[int(selection[0])] if selection and int(selection[0]) < len(self.records) else None
 
     def open_selected(self):
         record = self.selected()
@@ -268,6 +283,8 @@ class ScanApp:
             self.root.clipboard_append(f"{record['lat']:.7f},{record['lon']:.7f}")
 
     def select_hit(self, _event=None):
+        if len(self.table.selection()) != 1:
+            return
         record = self.selected()
         if not record:
             return
@@ -279,6 +296,8 @@ class ScanApp:
             self.append_log(f'圖片無法讀取：{exc}')
 
     def marker_select(self, index):
+        if not self.table.exists(str(index)):
+            return
         self.table.selection_set(str(index))
         self.table.see(str(index))
         self.select_hit()
@@ -310,7 +329,17 @@ class ScanApp:
 
     def handle(self, event):
         kind = event['kind']
-        if kind == 'session':
+        if kind == 'manual_done':
+            return self.handle_manual_done(event)
+        elif kind == 'history':
+            for record in event['records']:
+                if Path(record['path']).is_file():
+                    self.add_record(record)
+        elif kind == 'history_done':
+            self.history_busy = False
+            self.load_button.configure(state='normal')
+            self.append_log(event['text'])
+        elif kind == 'session':
             self.session_folder = event['folder']
             self.append_log(f"本次紀錄：{self.session_folder}")
         elif kind == 'status':
@@ -334,6 +363,7 @@ class ScanApp:
             # Web Mercator cannot draw the poles; retain exact coordinates in records.
             label = f"搜尋 #{event['index']}" if kind=='search' else '最後送出定位'
             setattr(self, attribute, self.map_widget.set_marker(max(-85, min(85, point[0])), point[1], text=label,
+                    text_color='#287fba' if kind=='search' else '#d48b32',
                     marker_color_outside='#287fba' if kind=='search' else '#d48b32'))
             if kind == 'search':
                 self.current_point = point
@@ -351,16 +381,11 @@ class ScanApp:
             self.processed = event['processed']
             record = event['record']
             if record['found']:
-                index = len(self.records)
-                self.records.append(record)
-                self.table.insert('', 'end', iid=str(index), values=(record['index'], record['target'], f"{record['lat']:.6f}, {record['lon']:.6f}", record['timestamp']))
-                marker = self.map_widget.set_marker(max(-85, min(85, record['lat'])), record['lon'], text=f"命中 #{record['index']} · {record['target']}",
-                    marker_color_outside='#338251', command=lambda _, i=index: self.marker_select(i))
-                self.markers.append(marker)
+                added_index = self.add_record(record)
                 self.append_log(f"找到 {record['target']}：{record['lat']:.6f}, {record['lon']:.6f}")
                 # Show first hit automatically; keep the user's later selection stable.
-                if not self.table.selection():
-                    self.marker_select(index)
+                if not self.table.selection() and added_index is not None:
+                    self.marker_select(added_index)
         elif kind == 'progress':
             self.completed, self.total = event['completed'], event['total']
             self.captured = event['captured']
@@ -382,8 +407,10 @@ class ScanApp:
             if self.closing:
                 if '失敗' in event['text']:
                     messagebox.showwarning('關閉前請確認', event['text'])
-                self.root.destroy()
+                self.finish_close()
                 return False
+            elif self.pending_teleport is not None:
+                self.dispatch_teleport()
         return True
 
     def poll(self):
@@ -399,16 +426,22 @@ class ScanApp:
             self.elapsed = time.monotonic()-self.started
         eta = f'{self.elapsed/self.completed*(self.total-self.completed)/60:.1f} 分' if self.completed and self.active else '—'
         recognition = f'{self.recognition_seconds:.2f} 秒' if self.recognition_seconds is not None else '—'
-        self.stats.set(f'已掃描 {self.completed} / {self.total}　命中 {self.hits}　錯誤 {self.errors}　待辨識 {pending}　辨識 {recognition}　已用 {self.elapsed/60:.1f} 分　掃描剩餘約 {eta}')
+        self.stats.set(f'已掃描 {self.completed} / {self.total}　本次命中 {self.hits}　清單 {len(self.records)}　錯誤 {self.errors}　待辨識 {pending}　辨識 {recognition}　剩餘約 {eta}')
         self.progress.configure(maximum=max(1, self.total), value=self.completed)
         self.root.after(100, self.poll)
 
     def close(self):
+        self.closing = True
+        self.pending_teleport = None
+        self.pending_start = False
         if self.active:
-            self.closing = True
             self.stop()
+        elif self.manual_busy:
+            self.status.set('等待定位指令結束，接著還原定位…')
+        elif self.manual_active:
+            self.run_manual('reset')
         else:
-            self.root.destroy()
+            self.finish_close()
 
 
 def main():

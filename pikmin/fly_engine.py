@@ -59,6 +59,21 @@ class Route:
         self.wait = self.elapsed = 0.
         # Position and monotonically increasing IDs survive clearing.
 
+    def remove(self, uid):
+        index = next((i for i, (identifier, _) in enumerate(self.points) if identifier == uid), None)
+        if index is None:
+            return False
+        self.running = False
+        was_current = index == self.index
+        self.points.pop(index)
+        if index < self.index:
+            self.index -= 1
+        if was_current:
+            self.wait = 0.
+        self.elapsed = 0.
+        self.index = min(self.index, len(self.points))
+        return True
+
     def start(self):
         if not self.points:
             raise ValueError('請先新增路線標點。')
@@ -162,6 +177,9 @@ class Controller(threading.Thread):
         elif kind == 'clear':
             r.clear()
             self.status = '路線已清除 · 停留目前位置，等待新增標點'
+        elif kind == 'remove':
+            if r.remove(value):
+                self.status = f'已刪除標點 {value} · 暫停原地，按開始繼續'
         elif kind == 'teleport':
             r.running = False
             if r.index >= len(r.points):
