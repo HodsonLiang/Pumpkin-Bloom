@@ -21,8 +21,6 @@ __pycache__/
 /waypoints*.txt
 /fly_route*.txt
 /scan_hits*.csv
-/worldcities.csv
-/india_villages/
 
 # Local exports and editor/OS metadata.
 /dist/
