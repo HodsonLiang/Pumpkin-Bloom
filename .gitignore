@@ -1,0 +1,36 @@
+# Local runtimes and environments (never distribute these).
+/myenv*/
+/python11/
+/.venv/
+/.build-venv/
+/.build/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Private/local captures, results, settings and source datasets.
+/found_targets/
+/scan_sessions/
+/temp_screenshots/
+/orig_pics/
+/other_pics/
+/local_archive/
+/launcher_settings.json
+/waypoints*.txt
+/fly_route*.txt
+/scan_hits*.csv
+/worldcities.csv
+/india_villages/
+
+# Local exports and editor/OS metadata.
+/dist/
+*.log
+.env
+.env.*
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+.DS_Store

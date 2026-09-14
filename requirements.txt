@@ -1,0 +1,6 @@
+# Direct runtime dependencies, pinned to the versions used by this project.
+# Python 3.11 (64-bit); tkinter is included with the official Windows installer.
+pymobiledevice3==9.32.0
+tkintermapview==1.30
+Pillow==12.2.0
+opencv-python==4.13.0.92
