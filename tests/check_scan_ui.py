@@ -18,6 +18,18 @@ def main():
     with patch('pikmin.scan_ui.tkintermapview.TkinterMapView', side_effect=offline_map):
         app = ScanApp(root)
     try:
+        saved_value = app.fields['interval'].get()
+        assert not app.settings_panel.opened
+        app.settings_panel.toggle()
+        assert app.settings_panel.body.winfo_manager() == "pack"
+        app.settings_panel.toggle()
+        assert not app.settings_panel.body.winfo_manager()
+        assert not app.manual_panel.opened
+        app.manual_panel.toggle()
+        assert app.manual_panel.body.winfo_manager() == "pack"
+        app.manual_panel.toggle()
+        assert not app.manual_panel.body.winfo_manager()
+        assert app.fields['interval'].get() == saved_value
         app.handle(dict(kind='search', point=(25, 121), index=1))
         app.handle(dict(kind='position', point=(25, 121)))
         assert app.current_marker and not app.sent_marker

@@ -7,6 +7,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import tkintermapview
 from .fly_engine import Controller, validate_point
+from .ui_layout import Foldout
 
 
 def duration(seconds):
@@ -20,7 +21,7 @@ class FakeGPSApp:
         self.root = root
         root.title('Pikmin · 路徑移動')
         root.geometry('1220x820')
-        root.minsize(1000, 820)
+        root.minsize(960, 620)
         self.commands, self.updates = queue.Queue(), queue.Queue()
         self.controller = Controller(self.commands, self.updates)
         self.snapshot = self.controller.snapshot()
@@ -33,22 +34,23 @@ class FakeGPSApp:
         style.configure('.', font=('Microsoft JhengHei UI', 10))
         style.configure('TButton', padding=(10, 7))
         style.configure('Title.TLabel', font=('Microsoft JhengHei UI', 21, 'bold'), foreground='#245a3d')
-        outer = ttk.Frame(root, padding=16)
+        outer = ttk.Frame(root, padding=10)
         outer.pack(fill='both', expand=True)
         ttk.Label(outer, text='路徑移動', style='Title.TLabel').pack(anchor='w')
         self.status = tk.StringVar(value=self.snapshot['status'])
         ttk.Label(outer, textvariable=self.status, wraplength=1100).pack(anchor='w', pady=(4, 12))
         self.stats = tk.StringVar()
         ttk.Label(outer, textvariable=self.stats, font=('Microsoft JhengHei UI', 13, 'bold')).pack(anchor='w', pady=(0, 12))
-        content = ttk.Frame(outer)
+        content = ttk.Panedwindow(outer, orient='horizontal')
         content.pack(fill='both', expand=True)
         side = ttk.Frame(content, padding=(0, 0, 16, 0))
-        side.pack(side='left', fill='y')
+        content.add(side, weight=0)
         self.speed = tk.StringVar(value=os.environ.get('PIKMIN_SPEED', '18'))
         self.interval, self.dwell = tk.StringVar(value='2'), tk.StringVar(value='8')
         self.loop, self.follow = tk.BooleanVar(value=False), tk.BooleanVar(value=False)
-        settings = ttk.LabelFrame(side, text='移動設定 · 執行中也可調整', padding=12)
-        settings.pack(fill='x')
+        self.settings_panel = Foldout(side, '速度與移動設定')
+        self.settings_panel.pack(fill='x')
+        settings = self.settings_panel.body
         for row, (label, variable) in enumerate([('速度（km/h）', self.speed), ('座標傳送間隔（秒）', self.interval), ('抵達標點停留（秒）', self.dwell)]):
             ttk.Label(settings, text=label).grid(row=row, column=0, sticky='w', pady=4)
             ttk.Entry(settings, textvariable=variable, width=9).grid(row=row, column=1, padx=8)
@@ -59,24 +61,29 @@ class FakeGPSApp:
         for i, (label, command) in enumerate([('▶ 開始／繼續', lambda: self.send('start')), ('Ⅱ 暫停原地', lambda: self.send('pause')),
                 ('跳至下一點', lambda: self.send('teleport')), ('清空路線・停原地', lambda: self.send('clear'))]):
             ttk.Button(controls, text=label, command=command).grid(row=i//2, column=i%2, sticky='ew', padx=2, pady=3)
-        add = ttk.LabelFrame(side, text='新增標點', padding=10)
-        add.pack(fill='x')
+        self.coords_panel = Foldout(side, '輸入座標新增標點')
+        self.coords_panel.pack(fill='x')
+        add = self.coords_panel.body
         self.lat, self.lon = tk.StringVar(), tk.StringVar()
         for row, (label, variable) in enumerate([('緯度', self.lat), ('經度', self.lon)]):
             ttk.Label(add, text=label).grid(row=row, column=0)
             ttk.Entry(add, textvariable=variable, width=23).grid(row=row, column=1, padx=8, pady=3)
         ttk.Button(add, text='加入路線', command=self.add_input).grid(row=2, column=0, columnspan=2, sticky='ew', pady=4)
-        files = ttk.Frame(side)
-        files.pack(fill='x', pady=8)
-        ttk.Button(files, text='匯入路線', command=self.load_route).pack(side='left', expand=True, fill='x')
-        ttk.Button(files, text='匯出路線', command=self.save_route).pack(side='left', expand=True, fill='x', padx=4)
+        menus = tk.Menu(root)
+        route_menu = tk.Menu(menus, tearoff=False)
+        route_menu.add_command(label='匯入路線…', command=self.load_route)
+        route_menu.add_command(label='匯出路線…', command=self.save_route)
+        route_menu.add_separator()
+        route_menu.add_command(label='還原真實定位', command=lambda: self.send('reset'))
+        menus.add_cascade(label='路線', menu=route_menu)
+        root.configure(menu=menus)
+        ttk.Label(side, text='路線標點 · 右鍵可刪除').pack(anchor='w', pady=(8, 4))
         self.listbox = tk.Listbox(side, height=6, font=('Consolas', 10), exportselection=False)
         self.listbox.pack(fill='both', expand=True)
         self.listbox.bind('<<ListboxSelect>>', self.focus_point)
         self.listbox.bind('<Button-3>', self.list_context)
-        ttk.Button(side, text='還原真實定位', command=lambda: self.send('reset')).pack(fill='x', pady=(10, 0))
         right = ttk.Frame(content)
-        right.pack(side='left', fill='both', expand=True)
+        content.add(right, weight=1)
         toolbar = ttk.Frame(right)
         toolbar.pack(fill='x', pady=(0, 8))
         ttk.Button(toolbar, text='回到目前位置', command=self.center).pack(side='left')

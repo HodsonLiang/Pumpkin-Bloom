@@ -14,6 +14,18 @@ def main():
     with patch('pikmin.fly_ui.tkintermapview.TkinterMapView', side_effect=offline_map), patch('pikmin.fly_ui.Controller.start'):
         app = FakeGPSApp(root)
     try:
+        saved_value = app.speed.get()
+        assert not app.settings_panel.opened
+        app.settings_panel.toggle()
+        assert app.settings_panel.body.winfo_manager() == "pack"
+        app.settings_panel.toggle()
+        assert not app.settings_panel.body.winfo_manager()
+        assert not app.coords_panel.opened
+        app.coords_panel.toggle()
+        assert app.coords_panel.body.winfo_manager() == "pack"
+        app.coords_panel.toggle()
+        assert not app.coords_panel.body.winfo_manager()
+        assert app.speed.get() == saved_value
         c = app.controller
         c.command('add', [(25.034, 121.565), (25.035, 121.566)])
         app.render(c.snapshot())
