@@ -151,21 +151,18 @@ class ScanApp(ScanActions):
         bar = ttk.Frame(gallery)
         bar.pack(fill='x', pady=(0, 4))
         ttk.Button(bar, text='傳送到選取目標', command=self.teleport_selected).pack(side='left')
+        ttk.Button(bar, text='刪除選取目標', command=self.delete_selected).pack(side='left', padx=6)
         self.load_button = ttk.Button(bar, text='載入歷史結果', command=self.load_history)
         self.load_button.pack(side='left', padx=6)
         actions = ttk.Menubutton(bar, text='目標操作 ▾')
-        menu = tk.Menu(actions, tearoff=False)
-        for label, command in [('開啟原始截圖', self.open_selected), ('複製選取座標', self.copy_coords),
-                               ('匯出命中 CSV', self.export), ('全選', self.select_all),
-                               ('刪除選取（移至回收區）', self.delete_selected)]:
-            menu.add_command(label=label, command=command)
+        menu = self.target_menu(actions)
         actions.configure(menu=menu)
         actions.pack(side='left')
         table_frame = ttk.Frame(gallery)
         table_frame.pack(fill='both', expand=True)
-        columns = ('index', 'target', 'coords', 'time')
+        columns = ('bookmark', 'index', 'target', 'coords', 'time')
         self.table = ttk.Treeview(table_frame, columns=columns, show='headings', height=5, selectmode='extended')
-        for key, title, width in zip(columns, ['座標序號', '目標', '緯度, 經度', '截圖時間'], [90, 200, 260, 200]):
+        for key, title, width in zip(columns, ['書籤', '座標序號', '目標', '緯度, 經度', '截圖時間'], [50, 90, 160, 240, 180]):
             self.table.heading(key, text=title)
             self.table.column(key, width=width)
         scroll = ttk.Scrollbar(table_frame, orient='vertical', command=self.table.yview)
@@ -174,6 +171,7 @@ class ScanApp(ScanActions):
         self.table.pack(fill='both', expand=True)
         self.table.bind('<<TreeviewSelect>>', self.select_hit)
         self.table.bind('<Control-a>', lambda _: (self.select_all(), 'break')[-1])
+        self.table.bind('<Button-3>', self.target_context)
         self.table.bind('<Delete>', lambda _: self.delete_selected())
         self.log = ScrolledText(logs, height=6, state='disabled', font=('Consolas', 10))
         self.log.pack(fill='both', expand=True)

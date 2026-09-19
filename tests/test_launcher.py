@@ -27,16 +27,54 @@ class LauncherTests(unittest.TestCase):
 
     def test_existing_single_device_service_is_reused(self):
         app = self.controller()
-        app.spawn = Mock()
-        with patch('launcher.tunnels', return_value={'device': [{}]}):
+        app.spawn = Mock(return_value=Mock(returncode=0))
+        with patch('launcher.device_ids', return_value=['device']), patch('launcher.kill_tree'), patch('launcher.tunnels', return_value={'device': [{}]}):
             self.assertTrue(app.connect())
-        app.spawn.assert_not_called()
+        self.assertEqual(app.spawn.call_args.args[0][-2:], ['mounter', 'auto-mount'])
 
     def test_multiple_devices_are_rejected(self):
         app = self.controller()
-        with patch('launcher.tunnels', return_value={'one': [{}], 'two': [{}]}):
+        with patch('launcher.device_ids', return_value=['one', 'two']):
             with self.assertRaises(RuntimeError):
                 app.connect()
+
+    def test_missing_device_never_starts_tunnel(self):
+        app = self.controller()
+        app.spawn = Mock()
+        with patch('launcher.device_ids', return_value=[]):
+            with self.assertRaises(RuntimeError):
+                app.connect()
+        app.spawn.assert_not_called()
+
+    def test_mount_failure_prevents_tunnel_start(self):
+        app = self.controller()
+        app.spawn = Mock(return_value=Mock(returncode=1))
+        with patch('launcher.device_ids', return_value=['device']), patch('launcher.kill_tree'):
+            with self.assertRaises(RuntimeError):
+                app.connect()
+        self.assertEqual(app.spawn.call_count, 1)
+
+    def test_device_query_deduplicates_and_rejects_bad_data(self):
+        with patch('launcher.subprocess.run', return_value=Mock(returncode=0, stdout='["one", "one"]')):
+            self.assertEqual(launcher.device_ids(), ['one'])
+        with patch('launcher.subprocess.run', return_value=Mock(returncode=0, stdout='error')):
+            with self.assertRaises(RuntimeError):
+                launcher.device_ids()
+
+    def test_start_button_requires_device_except_generation(self):
+        app = self.controller()
+        app.busy = app.closing = app.device_connected = False
+        app.tabs = Mock()
+        app.start_button = Mock()
+        for mode, connected, busy, expected in [(0, False, False, 'disabled'),
+                                               (1, False, False, 'disabled'),
+                                               (2, False, False, 'normal'),
+                                               (0, True, False, 'normal'),
+                                               (0, True, True, 'disabled')]:
+            app.tabs.index.return_value = mode
+            app.device_connected, app.busy = connected, busy
+            app.update_start_state()
+            app.start_button.configure.assert_called_with(state=expected)
 
     def test_worker_failure_still_restores_location(self):
         app = self.controller()

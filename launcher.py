@@ -19,6 +19,21 @@ SETTINGS = BASE / 'launcher_settings.json'
 HIDDEN = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
 
+def device_ids():
+    result = subprocess.run([str(PYTHON), '-m', 'pymobiledevice3', 'usbmux', 'list', '--simple'],
+                            capture_output=True, text=True, encoding='utf-8', errors='replace',
+                            timeout=8, creationflags=HIDDEN, env={**os.environ, 'NO_COLOR': '1'})
+    if result.returncode:
+        raise RuntimeError('無法讀取 Apple 裝置服務；請安裝／修復 Apple Devices 或 iTunes 驅動。')
+    try:
+        data = json.loads(result.stdout)
+        if not isinstance(data, list) or not all(isinstance(item, str) for item in data):
+            raise ValueError()
+    except ValueError:
+        raise RuntimeError('裝置查詢失敗；請檢查 Apple 驅動、USB 與信任配對。') from None
+    return sorted(set(data))
+
+
 def read_waypoints(path):
     points = []
     with open(path, encoding='utf-8-sig') as stream:
@@ -64,6 +79,8 @@ class Launcher:
         self.process = None
         self.busy = False
         self.closing = False
+        self.device_connected = False
+        self.monitor_stop = threading.Event()
         root.title('Pikmin · 裝置控制台')
         root.geometry('960x760')
         root.minsize(820, 650)
@@ -78,6 +95,8 @@ class Launcher:
         ttk.Label(body, text='連接 iPhone → 選擇模式 → 一鍵啟動', padding=(0, 6)).pack(anchor='w')
         self.status = tk.StringVar(value='待命 · 請連接並解鎖 iPhone，確認已信任電腦及開啟開發者模式')
         ttk.Label(body, textvariable=self.status, wraplength=850, padding=(0, 10)).pack(anchor='w')
+        self.device_status = tk.StringVar(value='裝置連接狀態：檢查中…')
+        ttk.Label(body, textvariable=self.device_status, wraplength=850).pack(anchor='w')
         self.tabs = ttk.Notebook(body)
         self.tabs.pack(fill='x', pady=8)
         scan = ttk.Frame(self.tabs, padding=16)
@@ -108,7 +127,7 @@ class Launcher:
         ttk.Label(generate, text='使用「傳送與辨識」頁籤的點數上限。另存新檔後自動選用；印度資料沿用經度 +0.001 偏移。', wraplength=780).grid(row=2, column=0, columnspan=3, sticky='w', pady=12)
         bar = ttk.Frame(body)
         bar.pack(fill='x', pady=8)
-        self.start_button = ttk.Button(bar, text='▶ 啟動所選模式', command=self.start)
+        self.start_button = ttk.Button(bar, text='▶ 啟動所選模式', command=self.start, state='disabled')
         self.start_button.pack(side='left')
         self.stop_button = ttk.Button(bar, text='■ 停止並還原定位', command=self.stop, state='disabled')
         self.stop_button.pack(side='left', padx=10)
@@ -118,6 +137,25 @@ class Launcher:
         self.log.pack(fill='both', expand=True, pady=(6, 0))
         root.protocol('WM_DELETE_WINDOW', self.close)
         root.after(100, self.poll)
+        self.tabs.bind('<<NotebookTabChanged>>', lambda _: self.update_start_state())
+        threading.Thread(target=self.monitor_devices, daemon=True).start()
+
+    def update_start_state(self):
+        enabled = not self.busy and not self.closing and (self.device_connected or self.tabs.index(self.tabs.select()) == 2)
+        self.start_button.configure(state='normal' if enabled else 'disabled')
+
+    def monitor_devices(self):
+        while not self.monitor_stop.is_set():
+            try:
+                ids = device_ids()
+                connected = len(ids) == 1
+                text = ('已偵測到 1 台 iOS 裝置 · 啟動時檢查信任、開發者模式與通道' if connected else
+                        '未連接 iOS 裝置 · 請接上資料線並解鎖裝置' if not ids else
+                        '連接多台裝置 · 請只保留要操作的一台')
+            except Exception as exc:
+                connected, text = False, str(exc)
+            self.events.put(('device', (connected, text)))
+            self.monitor_stop.wait(4)
 
     def entry(self, parent, label, key, row, width=18):
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky='w', pady=4, padx=(0, 16))
@@ -145,7 +183,8 @@ class Launcher:
                      encoding='utf-8', errors='replace', creationflags=HIDDEN)
         def read():
             for line in process.stdout:
-                self.emit(line.rstrip())
+                if '"GET / HTTP/1.1" 200 OK' not in line:
+                    self.emit(line.rstrip())
             process.stdout.close()
         threading.Thread(target=read, daemon=True).start()
         return process
@@ -154,6 +193,9 @@ class Launcher:
         if self.busy:
             return
         mode = self.tabs.index(self.tabs.select())
+        if mode != 2 and not self.device_connected:
+            self.status.set('請先連接一台 iOS 裝置，再啟動。')
+            return
         values = {key: value.get() for key, value in self.fields.items()}
         try:
             maximum = int(values['max_points'])
@@ -188,13 +230,31 @@ class Launcher:
         threading.Thread(target=self.run, args=(mode, config, values), daemon=True).start()
 
     def connect(self):
+        ids = device_ids()
+        if len(ids) != 1:
+            raise RuntimeError('未連接裝置或連接多台裝置；請只連接一台 iOS 裝置後重試。')
+        self.events.put(('status', '準備開發者映像 · 請解鎖裝置並確認信任與開發者模式'))
+        mount = self.spawn(['-m', 'pymobiledevice3', 'mounter', 'auto-mount'])
+        deadline = time.monotonic() + 90
+        try:
+            while mount.poll() is None:
+                if self.cancel.wait(.2):
+                    return False
+                if time.monotonic() >= deadline:
+                    raise RuntimeError('開發者映像準備逾時；請檢查網路、解鎖與信任配對後重試。')
+            if mount.returncode:
+                raise RuntimeError('開發者映像掛載失敗；請確認已信任電腦、開啟開發者模式，並查看上方錯誤。')
+        finally:
+            kill_tree(mount)
+        if self.cancel.is_set():
+            return False
         try:
             data = tunnels()
             self.emit('使用已存在的連線服務。')
         except Exception:
             self.emit('正在啟動裝置連線服務…')
             self.tunnel = self.spawn(['-m', 'pymobiledevice3', 'remote', 'tunneld'])
-        deadline = time.monotonic() + 60
+        deadline = time.monotonic() + 30
         while not self.cancel.is_set() and time.monotonic() < deadline:
             if self.tunnel and self.tunnel.poll() is not None:
                 raise RuntimeError('連線服務已退出，請查看執行紀錄。')
@@ -206,13 +266,15 @@ class Launcher:
             if len(connected) > 1:
                 raise RuntimeError('目前連接多台裝置，請只保留要操作的一台。')
             if len(connected) == 1:
+                if connected[0] != ids[0]:
+                    raise RuntimeError('連線通道與目前裝置不符，請重啟 tunneld 後重試。')
                 self.emit('裝置通道已就緒。')
                 return True
             self.events.put(('status', '等待 iPhone · 請解鎖、信任電腦並開啟開發者模式'))
             self.cancel.wait(1)
         if self.cancel.is_set():
             return False
-        raise RuntimeError('60 秒內未找到裝置。請檢查 USB 連線、信任設定及開發者模式後重試。')
+        raise RuntimeError('30 秒內未建立裝置通道。請檢查 USB、信任與開發者模式；若剛掛載映像，可重啟 tunneld 後重試。')
 
     def run(self, mode, config, values):
         used_device = False
@@ -274,6 +336,7 @@ class Launcher:
         self.status.set('正在停止，請稍候…')
 
     def close(self):
+        self.monitor_stop.set()
         if self.busy:
             self.closing = True
             self.stop()
@@ -297,10 +360,14 @@ class Launcher:
                 self.fields['waypoints'].set(value)
             elif kind == 'status':
                 self.status.set(value)
+            elif kind == 'device':
+                self.device_connected, text = value
+                self.device_status.set('裝置連接狀態：'+text)
+                self.update_start_state()
             elif kind == 'done':
                 self.busy = False
                 self.status.set(value)
-                self.start_button.configure(state='normal')
+                self.update_start_state()
                 self.stop_button.configure(state='disabled')
                 if self.closing:
                     self.root.destroy()

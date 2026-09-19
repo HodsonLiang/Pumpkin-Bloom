@@ -80,3 +80,9 @@ py -3.11 -m venv myenv
 .\myenv\Scripts\python.exe -m pip install -r requirements.txt -c requirements-lock.txt
 Copy-Item examples\waypoints.txt waypoints.txt  # 僅在尚無自己的座標檔時執行
 ```
+
+### 裝置連線狀態
+
+啟動器會定期偵測 iOS 裝置；未連接、偵測失敗或連接多台時，停用掃描／移動模式的啟動按鈕，產生座標不受影響。偵測到装置表示 Apple 裝置服務可見，不代表已完成信任、開發者模式或 tunnel 初始化。啟動時會重新確認裝置、執行 `mounter auto-mount`，再等待正確的裝置通道。首次掛載可能需要網路；映像準備最多等待 90 秒，通道最多等待 30 秒。
+
+Setup 只安裝電腦端 Python 依賴，無法代替裝置上的「信任此電腦」、開發者模式及 Apple USB 驅動安裝。新電腦無法偵測裝置時，請確認資料線可傳輸資料、裝置已解鎖，並安裝／修復 Apple Devices 或 iTunes 的驅動。成功的 HTTP 健康查詢不再顯示於執行紀錄；真正的錯誤仍會保留。

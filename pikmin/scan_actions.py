@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import threading
 import subprocess
+import json
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -21,6 +22,58 @@ class ScanActions:
         self.icons = {}
         self.known_paths = set()
         self.result_folder = BASE/'found_targets'
+        self.bookmark_file = BASE/'target_bookmarks.json'
+        try:
+            saved = json.loads(self.bookmark_file.read_text(encoding='utf-8'))
+            self.bookmarks = set(saved) if isinstance(saved, list) and all(isinstance(x, str) for x in saved) else set()
+        except (OSError, ValueError):
+            self.bookmarks = set()
+
+    def bookmark_key(self, record):
+        return Path(record['path']).name.casefold()
+
+    def set_bookmarks(self, enabled):
+        selected = self.table.selection()
+        updated = self.bookmarks.copy()
+        for item in selected:
+            key = self.bookmark_key(self.records[int(item)])
+            updated.add(key) if enabled else updated.discard(key)
+        try:
+            temporary = self.bookmark_file.with_suffix('.tmp')
+            temporary.write_text(json.dumps(sorted(updated), ensure_ascii=False, indent=2), encoding='utf-8')
+            temporary.replace(self.bookmark_file)
+        except OSError as exc:
+            messagebox.showerror('書籤儲存失敗', str(exc))
+            return
+        self.bookmarks = updated
+        for item in selected:
+            record = self.records[int(item)]
+            self.table.set(item, 'bookmark', '★' if enabled else '')
+            self.markers[int(item)].set_text(('★ ' if enabled else '')+f"#{record['index']} · {record['target']}")
+
+    def target_menu(self, parent):
+        menu = tk.Menu(parent, tearoff=False)
+        for label, command in [('傳送到選取目標', self.teleport_selected), ('開啟原始截圖', self.open_selected),
+                               ('複製選取座標', self.copy_coords), ('加入書籤', lambda: self.set_bookmarks(True)),
+                               ('移除書籤', lambda: self.set_bookmarks(False)), ('匯出命中 CSV', self.export),
+                               ('全選', self.select_all), ('刪除選取（移至回收區）', self.delete_selected)]:
+            menu.add_command(label=label, command=command)
+        return menu
+
+    def target_context(self, event):
+        item = self.table.identify_row(event.y)
+        if not item:
+            return 'break'
+        if item not in self.table.selection():
+            self.table.selection_set(item)
+        self.table.focus(item)
+        menu = self.target_menu(self.table)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+            menu.destroy()
+        return 'break'
 
     def icon_for(self, target=None):
         if not target:
@@ -165,8 +218,9 @@ class ScanActions:
         self.known_paths.add(key)
         index = len(self.records)
         self.records.append(record)
-        self.table.insert('', 'end', iid=str(index), values=(record['index'], record['target'], f"{record['lat']:.6f}, {record['lon']:.6f}", record['timestamp']))
-        marker = self.map_widget.set_marker(max(-85, min(85, record['lat'])), record['lon'], text=f"#{record['index']} · {record['target']}",
+        star = '★' if self.bookmark_key(record) in self.bookmarks else ''
+        self.table.insert('', 'end', iid=str(index), values=(star, record['index'], record['target'], f"{record['lat']:.6f}, {record['lon']:.6f}", record['timestamp']))
+        marker = self.map_widget.set_marker(max(-85, min(85, record['lat'])), record['lon'], text=(star+' ' if star else '')+f"#{record['index']} · {record['target']}",
             icon=self.icon_for(record['target']), icon_anchor='s', marker_color_outside='#338251',
             command=lambda _, i=index: self.marker_select(i))
         self.markers.append(marker)

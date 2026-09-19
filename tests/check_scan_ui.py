@@ -44,6 +44,8 @@ def main():
             app.handle(dict(kind='screenshot', content=stream.getvalue(), point=(25, 121), index=1,
                             timestamp='2026-09-14T12:00:00', path=str(path)))
             target_name = next((Path(__file__).resolve().parent.parent/'mushroom_pics').glob('*.png')).name
+            app.bookmark_file = Path(folder)/'bookmarks.json'
+            app.bookmarks = set()
             record = dict(index=1, target=target_name, lat=25, lon=121, timestamp='2026-09-14T12:00:00',
                           path=str(path), found=True, timing='pipeline', session='test')
             app.handle(dict(kind='result', record=record, hits=1, errors=0, processed=1))
@@ -54,6 +56,11 @@ def main():
             assert app.current_marker.icon is None
             assert app.sent_marker.icon is None
             assert app.markers[0].icon is app.icon_for(target_name)
+            app.table.selection_set('0')
+            app.set_bookmarks(True)
+            assert app.table.set('0', 'bookmark') == '★'
+            assert app.bookmark_key(record) in app.bookmarks
+            assert app.bookmark_file.is_file()
             app.add_record(record)
             assert len(app.records) == 1, 'History/live duplicate was not deduplicated'
             app.result_folder = Path(folder)
@@ -62,6 +69,13 @@ def main():
             app.add_record({**record, 'path': str(second_path), 'index': 2})
             app.select_all()
             assert len(app.table.selection()) == 2
+            with patch.object(app.table, 'identify_row', return_value='1'), patch('pikmin.scan_actions.tk.Menu'):
+                app.target_context(Mock(y=20, x_root=30, y_root=40))
+                assert len(app.table.selection()) == 2
+            app.set_bookmarks(True)
+            assert app.table.set('1', 'bookmark') == '★'
+            app.set_bookmarks(False)
+            assert not app.bookmarks
             app.delete_selected()
             assert not path.exists() and not second_path.exists()
             assert len(list((Path(folder)/'.trash').rglob('*.png'))) == 2

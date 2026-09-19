@@ -32,3 +32,6 @@ __pycache__/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+/target_bookmarks.json
+/target_bookmarks.tmp
