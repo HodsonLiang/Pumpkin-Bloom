@@ -5,6 +5,7 @@ from unittest.mock import patch, Mock
 import queue
 import threading
 import launcher
+from pikmin import device_backend as backend
 
 
 class LauncherTests(unittest.TestCase):
@@ -28,20 +29,20 @@ class LauncherTests(unittest.TestCase):
     def test_existing_single_device_service_is_reused(self):
         app = self.controller()
         app.spawn = Mock(return_value=Mock(returncode=0))
-        with patch('launcher.device_ids', return_value=['device']), patch('launcher.kill_tree'), patch('launcher.tunnels', return_value={'device': [{}]}):
+        with patch('pikmin.device_backend.device_ids', return_value=['device']), patch('launcher.kill_tree'), patch('pikmin.device_backend.kill_tree'), patch('pikmin.device_backend.tunnels', return_value={'device': [{}]}):
             self.assertTrue(app.connect())
         self.assertEqual(app.spawn.call_args.args[0][-2:], ['mounter', 'auto-mount'])
 
     def test_multiple_devices_are_rejected(self):
         app = self.controller()
-        with patch('launcher.device_ids', return_value=['one', 'two']):
+        with patch('pikmin.device_backend.device_ids', return_value=['one', 'two']):
             with self.assertRaises(RuntimeError):
                 app.connect()
 
     def test_missing_device_never_starts_tunnel(self):
         app = self.controller()
         app.spawn = Mock()
-        with patch('launcher.device_ids', return_value=[]):
+        with patch('pikmin.device_backend.device_ids', return_value=[]):
             with self.assertRaises(RuntimeError):
                 app.connect()
         app.spawn.assert_not_called()
@@ -49,7 +50,7 @@ class LauncherTests(unittest.TestCase):
     def test_mount_failure_prevents_tunnel_start(self):
         app = self.controller()
         app.spawn = Mock(return_value=Mock(returncode=1))
-        with patch('launcher.device_ids', return_value=['device']), patch('launcher.kill_tree'):
+        with patch('pikmin.device_backend.device_ids', return_value=['device']), patch('launcher.kill_tree'), patch('pikmin.device_backend.kill_tree'):
             with self.assertRaises(RuntimeError):
                 app.connect()
         self.assertEqual(app.spawn.call_count, 1)
@@ -61,13 +62,13 @@ class LauncherTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 launcher.device_ids()
 
-    def test_start_button_requires_device_except_generation(self):
+    def test_all_modes_open_without_device(self):
         app = self.controller()
         app.busy = app.closing = app.device_connected = False
         app.tabs = Mock()
         app.start_button = Mock()
-        for mode, connected, busy, expected in [(0, False, False, 'disabled'),
-                                               (1, False, False, 'disabled'),
+        for mode, connected, busy, expected in [(0, False, False, 'normal'),
+                                               (1, False, False, 'normal'),
                                                (2, False, False, 'normal'),
                                                (0, True, False, 'normal'),
                                                (0, True, True, 'disabled')]:
@@ -76,7 +77,7 @@ class LauncherTests(unittest.TestCase):
             app.update_start_state()
             app.start_button.configure.assert_called_with(state=expected)
 
-    def test_worker_failure_still_restores_location(self):
+    def test_child_owns_device_cleanup(self):
         app = self.controller()
         app.connect = Mock(return_value=True)
         worker = Mock(returncode=1)
@@ -84,9 +85,10 @@ class LauncherTests(unittest.TestCase):
         clear = Mock()
         clear.wait.return_value = 0
         app.spawn = Mock(side_effect=[worker, clear])
-        with patch('launcher.kill_tree'):
+        with patch('launcher.kill_tree'), patch('pikmin.device_backend.kill_tree'):
             app.run(0, {'speed': 18}, {})
-        self.assertEqual(app.spawn.call_args_list[1].args[0][-1], 'clear')
+        self.assertEqual(app.spawn.call_count, 1)
+        app.connect.assert_not_called()
         events = list(app.events.queue)
         self.assertTrue(any(kind == 'done' and '失敗' in value for kind, value in events))
 
@@ -95,7 +97,7 @@ class LauncherTests(unittest.TestCase):
         app.connect = Mock(return_value=False)
         app.spawn = Mock()
         app.cancel.set()
-        with patch('launcher.kill_tree'):
+        with patch('launcher.kill_tree'), patch('pikmin.device_backend.kill_tree'):
             app.run(0, {'speed': 18}, {})
         app.spawn.assert_not_called()
 

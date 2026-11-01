@@ -14,7 +14,7 @@ COMMANDS = (
 def check_command(command):
     environment = {**os.environ, 'PYTHONIOENCODING': 'utf-8', 'NO_COLOR': '1'}
     result = subprocess.run(
-        [sys.executable, '-m', 'pymobiledevice3', *command, '--help'],
+        [sys.executable, '-m', 'pikmin.device_cli', *command, '--help'],
         capture_output=True, text=True, encoding='utf-8', errors='replace',
         timeout=45, env=environment,
         creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),

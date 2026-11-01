@@ -1,19 +1,23 @@
 """Offline UI smoke check: real Tk/map widgets, no device calls or tile downloads."""
 import tkinter as tk
+import math
+import io
+from PIL import Image
 from unittest.mock import patch, Mock
-import tkintermapview
+from pikmin.world_map import WorldMap
 from pikmin.fly_ui import FakeGPSApp
 
 
 def main():
-    original_map = tkintermapview.TkinterMapView
+    original_map = WorldMap
     def offline_map(*args, **kwargs):
         return original_map(*args, use_database_only=True, **kwargs)
     root = tk.Tk()
     root.withdraw()
-    with patch('pikmin.fly_ui.tkintermapview.TkinterMapView', side_effect=offline_map), patch('pikmin.fly_ui.Controller.start'):
+    with patch('pikmin.fly_ui.WorldMap', side_effect=offline_map), patch('pikmin.fly_ui.DeviceSession'), patch('pikmin.fly_ui.Controller.start'):
         app = FakeGPSApp(root)
     try:
+        assert app.current_marker is None and app.snapshot['position'] is None
         saved_value = app.speed.get()
         assert not app.settings_panel.opened
         app.settings_panel.toggle()
@@ -53,6 +57,46 @@ def main():
         with patch.object(app.map_widget.canvas, 'find_overlapping', return_value=()), patch.object(app.map_widget, 'mouse_right_click') as original_menu:
             app.map_context(event)
             original_menu.assert_called_once_with(event)
+        world = app.map_widget
+        world.width, world.height = 800, 400
+        world.set_zoom(8)
+        world.set_position(0, 179.9)
+        left = world.set_marker(0, 179.9)
+        right = world.set_marker(0, -179.9)
+        x1, _ = left.get_canvas_pos(left.position)
+        x2, _ = right.get_canvas_pos(right.position)
+        assert 0 < x2-x1 < 50, (x1, x2)
+        route = world.set_path([(0, 179.9), (0, -179.9)])
+        coords = world.canvas.coords(route.canvas_line)
+        assert 0 < coords[2]-coords[0] < 50, coords
+        size = 2**round(world.zoom)
+        assert math.floor(world.upper_left_tile_pos[0]/size) != math.floor(world.lower_right_tile_pos[0]/size)
+        latitude, longitude = world.convert_canvas_coords_to_decimal_coords(world.width-1, world.height/2)
+        assert -180 <= longitude <= 180
+        before = world.center_longitude()
+        world.set_position(0, -179.9)
+        assert abs(world.center_longitude()-before-.2) < .001
+        world.set_zoom(9)
+        assert abs(world.center_longitude()-before-.2) < .001
+        tile = world.canvas_tile_array[1][1]
+        x, y = tile.tile_name_position
+        zoom = round(world.zoom)
+        stream = io.BytesIO()
+        Image.new('RGB', (256, 256), 'green').save(stream, format='PNG')
+        world.image_load_queue_results.append(((zoom, x, y), tile, stream.getvalue()))
+        with patch.object(world, 'winfo_viewable', return_value=True):
+            world.update_canvas_tile_images()
+        assert tile.canvas_object is not None
+        assert (zoom, x % (2**zoom), y) in world.tile_image_cache
+        # A response for a recycled canvas tile must never paint the wrong place.
+        world.image_load_queue_results.append(((zoom, x+1, y), tile, stream.getvalue()))
+        old_image = tile.image
+        with patch.object(world, 'winfo_viewable', return_value=True):
+            world.update_canvas_tile_images()
+        assert tile.image is old_image
+        with patch.object(world.tile_client, 'fetch') as fetch:
+            world.pre_cache()
+            fetch.assert_not_called()
         print('Offline UI check passed: real map, route line, unique labels, clear, re-add.')
         print('Requested layout:', root.winfo_reqwidth(), root.winfo_reqheight())
     finally:

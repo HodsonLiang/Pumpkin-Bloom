@@ -5,7 +5,10 @@ import queue
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-import tkintermapview
+import json
+from .world_map import WorldMap
+from .device_session import DeviceSession
+from .storage import ROUTES, read_points, save_points
 from .fly_engine import Controller, validate_point
 from .ui_layout import Foldout
 
@@ -24,6 +27,9 @@ class FakeGPSApp:
         root.minsize(960, 620)
         self.commands, self.updates = queue.Queue(), queue.Queue()
         self.controller = Controller(self.commands, self.updates)
+        start = json.loads(os.environ.get('PIKMIN_START_POSITION', 'null'))
+        if start is not None:
+            self.controller.route.position = validate_point(*start)
         self.snapshot = self.controller.snapshot()
         self.markers = {}
         self.path = None
@@ -69,6 +75,12 @@ class FakeGPSApp:
             ttk.Label(add, text=label).grid(row=row, column=0)
             ttk.Entry(add, textvariable=variable, width=23).grid(row=row, column=1, padx=8, pady=3)
         ttk.Button(add, text='加入路線', command=self.add_input).grid(row=2, column=0, columnspan=2, sticky='ew', pady=4)
+        self.route_file_button = ttk.Menubutton(side, text='匯出／載入標點 ▾')
+        file_menu = tk.Menu(self.route_file_button, tearoff=False)
+        file_menu.add_command(label='匯出畫面上的標點…', command=self.save_route)
+        file_menu.add_command(label='載入標點檔（.pikroute）…', command=self.load_route)
+        self.route_file_button.configure(menu=file_menu)
+        self.route_file_button.pack(fill='x', pady=(8, 0))
         menus = tk.Menu(root)
         route_menu = tk.Menu(menus, tearoff=False)
         route_menu.add_command(label='匯入路線…', command=self.load_route)
@@ -89,16 +101,19 @@ class FakeGPSApp:
         ttk.Button(toolbar, text='回到目前位置', command=self.center).pack(side='left')
         ttk.Button(toolbar, text='複製目前座標', command=self.copy_position).pack(side='left', padx=6)
         ttk.Checkbutton(toolbar, text='跟隨位置', variable=self.follow).pack(side='left')
-        self.map_widget = tkintermapview.TkinterMapView(right, corner_radius=8)
+        self.map_widget = WorldMap(right, corner_radius=8)
         self.map_widget.pack(fill='both', expand=True)
-        self.map_widget.set_position(*self.snapshot['position'])
+        self.map_widget.set_position(*(self.snapshot['position'] or (25.033964, 121.564468)))
         self.map_widget.set_zoom(15)
-        self.current_marker = self.map_widget.set_marker(*self.snapshot['position'], text='目前模擬位置', marker_color_outside='#245a3d')
+        self.current_marker = None
+        if self.snapshot['position'] is not None:
+            self.current_marker = self.map_widget.set_marker(*self.snapshot['position'], text='目前模擬位置', marker_color_outside='#245a3d')
         self.map_widget.add_right_click_menu_command(label='加入路線標點', command=self.add_map, pass_coords=True)
         self.map_widget.canvas.bind('<Button-3>', self.map_context)
         ttk.Label(right, text='右鍵新增標點；點左側清單可定位。ETA 包含傳送間隔與中途停留，未含裝置延遲。', wraplength=650).pack(anchor='w', pady=8)
         self.position_label = tk.StringVar()
         ttk.Label(right, textvariable=self.position_label).pack(anchor='w')
+        self.device_session = DeviceSession(root, lambda: self.send('pause'))
         self.apply_settings()
         self.controller.start()
         root.protocol('WM_DELETE_WINDOW', self.on_closing)
@@ -106,7 +121,16 @@ class FakeGPSApp:
 
     def send(self, kind, value=None):
         if not self.closing:
-            self.commands.put((kind, value))
+            if kind in ('start', 'teleport', 'reset'):
+                if kind != 'reset' and not self.snapshot['points']:
+                    messagebox.showinfo('沒有路線', '請先新增標點。')
+                    return
+                self.status.set('正在準備裝置連線…')
+                self.device_session.ensure(lambda: self.commands.put((kind, value)))
+            else:
+                if kind in ('pause', 'clear', 'load', 'remove', 'close'):
+                    self.device_session.cancel_pending()
+                self.commands.put((kind, value))
 
     def map_context(self, event):
         canvas = self.map_widget.canvas
@@ -167,37 +191,39 @@ class FakeGPSApp:
             messagebox.showerror('座標無效', str(exc))
 
     def load_route(self):
-        path = filedialog.askopenfilename(filetypes=[('座標檔', '*.txt')])
+        ROUTES.mkdir(parents=True, exist_ok=True)
+        path = filedialog.askopenfilename(parent=self.root, title='載入標點檔', initialdir=ROUTES, filetypes=[('標點檔', '*.pikroute')])
         if not path:
             return
         try:
-            points = []
-            for line in Path(path).read_text(encoding='utf-8-sig').splitlines():
-                if line.strip():
-                    lat, lon = map(float, line.split(','))
-                    points.append(validate_point(lat, lon))
-            if not points:
-                raise ValueError('檔案沒有座標。')
-            if len(points) + len(self.snapshot['points']) > 2000:
-                raise ValueError('地圖路線最多匯入至 2000 點，請選用較小的路線檔。')
-            self.send('add', points)
+            points = [validate_point(*p) for p in read_points(path)]
+            if len(points) > 2000:
+                raise ValueError('地圖路線最多 2000 點。')
+            self.send('load', points)
         except (OSError, ValueError) as exc:
-            messagebox.showerror('匯入失敗', str(exc))
+            messagebox.showerror('載入失敗', str(exc))
 
     def save_route(self):
         if not self.snapshot['points']:
+            messagebox.showinfo('沒有路線', '請先新增標點。')
             return
-        path = filedialog.asksaveasfilename(defaultextension='.txt', initialfile='fly_route.txt')
+        ROUTES.mkdir(parents=True, exist_ok=True)
+        path = filedialog.asksaveasfilename(parent=self.root, title='匯出畫面上的標點', initialdir=ROUTES, defaultextension='.pikroute', initialfile='route.pikroute', filetypes=[('標點檔', '*.pikroute')])
         if path:
             try:
-                Path(path).write_text(''.join(f'{p[0]:.7f},{p[1]:.7f}\n' for _, p in self.snapshot['points']), encoding='utf-8')
-            except OSError as exc:
-                messagebox.showerror('匯出失敗', str(exc))
+                if Path(path).parent.resolve() != ROUTES.resolve():
+                    raise ValueError('請儲存在 data/routes 資料夾。')
+                save_points(path, [p for _, p in self.snapshot['points']], kind='route')
+            except (OSError, ValueError) as exc:
+                messagebox.showerror('儲存失敗', str(exc))
 
     def center(self):
-        self.map_widget.set_position(*self.snapshot['position'])
+        if self.snapshot['position'] is not None:
+            self.map_widget.set_position(*self.snapshot['position'])
 
     def copy_position(self):
+        if self.snapshot['position'] is None:
+            return
         self.root.clipboard_clear()
         self.root.clipboard_append(','.join(f'{n:.7f}' for n in self.snapshot['position']))
 
@@ -210,10 +236,17 @@ class FakeGPSApp:
         old = self.snapshot
         self.snapshot = state
         self.status.set(state['status'] if not self.closing else '正在關閉並還原定位，請稍候…')
+        if self.device_session.pending and not self.closing:
+            self.status.set('正在準備裝置連線…')
         eta_label = '本圈剩餘' if state['loop'] else '預估剩餘'
         self.stats.set(f"{eta_label}  {duration(state['seconds'])}     剩餘 {state['distance']/1000:.2f} km     已完成 {state['laps']} 趟" + ('   ∞ 循環' if state['loop'] else ''))
-        self.position_label.set(f"最後送出／預設座標：{state['position'][0]:.7f}, {state['position'][1]:.7f}" + (f"   停留 {state['wait']:.1f} 秒" if state['wait'] else ''))
-        self.current_marker.set_position(*state['position'])
+        position = state['position']
+        self.position_label.set(f"最後送出／指定座標：{position[0]:.7f}, {position[1]:.7f}" if position is not None else '尚未指定位置；開始後先傳送至第一點')
+        if position is not None:
+            if self.current_marker is None:
+                self.current_marker = self.map_widget.set_marker(*position, text='目前模擬位置', marker_color_outside='#245a3d')
+            else:
+                self.current_marker.set_position(*position)
         if self.follow.get() and old['position'] != state['position']:
             self.center()
         signature = (tuple(state['points']), state['index'], state['loop'])
@@ -227,7 +260,7 @@ class FakeGPSApp:
                 label = '→' if index == state['index'] else ('✓' if index < state['index'] else ' ')
                 self.listbox.insert('end', f'{label} #{uid}  {point[0]:.5f}, {point[1]:.5f}')
                 self.markers[uid] = self.map_widget.set_marker(*point, text=f'標點 {uid}', marker_color_outside='#9aaca0' if index < state['index'] else '#cf7944')
-        path_points = [state['position']] + [p for _, p in state['points'][state['index']:]]
+        path_points = ([state['position']] if state['position'] is not None else []) + [p for _, p in state['points'][state['index']:]]
         if state['loop'] and state['points']:
             path_points += [p for _, p in state['points'][:state['index']+1]]
         if len(path_points) < 2:
@@ -240,6 +273,11 @@ class FakeGPSApp:
             self.path = self.map_widget.set_path(path_points, color='#357b56', width=4)
 
     def poll(self):
+        stop_file = os.environ.get('PIKMIN_STOP_FILE')
+        if stop_file and Path(stop_file).exists() and not self.closing:
+            self.on_closing()
+            if not self.root.winfo_exists():
+                return
         latest = None
         while True:
             try:
@@ -250,8 +288,11 @@ class FakeGPSApp:
             if latest.get('closed'):
                 if latest['status'].startswith('已停止'):
                     messagebox.showwarning('定位還原失敗', latest['status'])
+                self.device_session.close()
                 self.root.destroy()
                 return
+            if latest['status'].startswith('已停止：') and latest['status'] != self.snapshot['status']:
+                messagebox.showerror('移動已停止', latest['status'])
             self.render(latest)
         self.root.after(100, self.poll)
 

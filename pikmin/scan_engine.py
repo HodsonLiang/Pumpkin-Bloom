@@ -11,10 +11,11 @@ import threading
 import time
 import uuid
 from .fly_engine import Device
+from .storage import read_points, WAYPOINTS
 from .vision import check_image_has_target
 
 BASE = Path(__file__).resolve().parent.parent
-DEFAULTS = dict(waypoints=str(BASE/'waypoints.txt'), max_points=10000, start_index=1,
+DEFAULTS = dict(waypoints=str(WAYPOINTS/'waypoints.pikscan'), max_points=10000, start_index=1,
                 initial_wait=12., screenshot_wait=5., interval=10., threshold=.058,
                 timing='pipeline')
 
@@ -36,17 +37,7 @@ def prepare_config(values):
     path = Path(config['waypoints']).expanduser()
     if not path.is_absolute():
         path = BASE/path
-    points = []
-    for number, line in enumerate(path.read_text(encoding='utf-8-sig').splitlines(), 1):
-        if not line.strip():
-            continue
-        try:
-            lat, lon = map(float, line.split(','))
-            if not (math.isfinite(lat) and math.isfinite(lon) and -90 <= lat <= 90 and -180 <= lon <= 180):
-                raise ValueError()
-        except ValueError:
-            raise ValueError(f'座標檔第 {number} 行無效，格式須為緯度,經度。') from None
-        points.append((lat, lon))
+    points = read_points(path)
     begin = config['start_index']-1
     if begin >= len(points):
         raise ValueError('起始點超出座標檔範圍，或檔案沒有座標。')
@@ -63,7 +54,7 @@ class ScanDevice(Device):
     def capture(self, path):
         self.check()
         try:
-            subprocess.run([sys.executable, '-m', 'pymobiledevice3', 'developer', 'dvt', 'screenshot', str(path)],
+            subprocess.run([sys.executable, '-m', 'pikmin.device_cli', 'developer', 'dvt', 'screenshot', str(path)],
                            check=True, capture_output=True, timeout=15, creationflags=self.flags)
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(exc.stderr.decode('utf-8', errors='replace')[-600:] or '截圖失敗') from exc
@@ -75,6 +66,8 @@ class Scanner(threading.Thread):
     def __init__(self, config, points, events, *, base=BASE, device=None, recognizer=None):
         super().__init__(daemon=True)
         self.config, self.points, self.events = config, points, events
+        self.target_lock = threading.Lock()
+        self.target_names = tuple(config['target_names']) if 'target_names' in config else None
         self.base = Path(base)
         self.device = device if device is not None else ScanDevice()
         self.recognizer = recognizer or check_image_has_target
@@ -88,6 +81,13 @@ class Scanner(threading.Thread):
 
     def emit(self, kind, **data):
         self.events.put(dict(kind=kind, **data))
+
+    def set_target_names(self, names):
+        names = tuple(sorted(set(names)))
+        if not names:
+            raise ValueError('至少選一種搜尋目標。')
+        with self.target_lock:
+            self.target_names = names
 
     def wait(self, seconds):
         # Check failed GPS processes during loading, rather than blindly capturing.
@@ -116,7 +116,13 @@ class Scanner(threading.Thread):
                           timing=self.config['timing'], session=self.session)
             recognition_started = time.perf_counter()
             try:
-                found, name = self.recognizer(str(path), str(self.base/'mushroom_pics'), threshold=self.config['threshold'])
+                options = {'threshold': self.config['threshold']}
+                with self.target_lock:
+                    names = self.target_names
+                if names is not None:
+                    options['target_names'] = names
+                    record['target_names'] = list(names)
+                found, name = self.recognizer(str(path), str(self.base/'mushroom_pics'), **options)
                 record.update(found=bool(found), target=name or '', path='')
                 if found:
                     safe_name = Path(name or 'target').stem

@@ -5,19 +5,22 @@ import tempfile
 import tkinter as tk
 from unittest.mock import patch, Mock
 from PIL import Image
-import tkintermapview
+from pikmin.world_map import WorldMap
 from pikmin.scan_ui import ScanApp
 
 
 def main():
-    original = tkintermapview.TkinterMapView
+    original = WorldMap
     def offline_map(*args, **kwargs):
         return original(*args, use_database_only=True, **kwargs)
     root = tk.Tk()
     root.withdraw()
-    with patch('pikmin.scan_ui.tkintermapview.TkinterMapView', side_effect=offline_map):
+    with patch('pikmin.scan_ui.WorldMap', side_effect=offline_map), patch('pikmin.scan_ui.DeviceSession'):
         app = ScanApp(root)
+        app.device_session.ensure.side_effect = lambda callback, *args: callback()
     try:
+        assert not app.table.column('bookmark', 'stretch')
+        assert app.table.column('bookmark', 'width') == app.table.column('bookmark', 'minwidth')
         saved_value = app.fields['interval'].get()
         assert not app.settings_panel.opened
         app.settings_panel.toggle()
@@ -67,6 +70,18 @@ def main():
             second_path = Path(folder)/'second.png'
             image.save(second_path)
             app.add_record({**record, 'path': str(second_path), 'index': 2})
+            app.sort_targets('index')
+            assert app.table.get_children() == ('1', '0')
+            app.sort_targets('index')
+            assert app.table.get_children() == ('0', '1')
+            app.table.selection_set('1')
+            app.display_types = set()
+            app.refresh_catalog()
+            assert not app.table.get_children() and all(m is None for m in app.markers)
+            assert not app.table.selection() and len(app.records) == 2
+            app.display_types = None
+            app.refresh_catalog()
+            assert len(app.table.get_children()) == 2 and all(app.markers)
             app.select_all()
             assert len(app.table.selection()) == 2
             with patch.object(app.table, 'identify_row', return_value='1'), patch('pikmin.scan_actions.tk.Menu'):
@@ -105,6 +120,56 @@ def main():
             app.handle(dict(kind='manual_done', operation='reset', point=None, error=None))
             restart.assert_called_once()
         assert not app.manual_active
+        from pikmin.storage import read_points
+        fixture = ({'start_index': 1, 'timing': 'pipeline'}, [(25., 121.)])
+        with patch('pikmin.scan_ui.prepare_config', return_value=fixture), patch.object(app, 'begin_scan') as begin, patch.object(app.root, 'after') as after:
+            app.delay_seconds = 30
+            app.start()
+            assert app.waiting_start
+            delayed = after.call_args.args[1]
+            app.stop()
+            delayed()
+            begin.assert_not_called()
+            assert not app.waiting_start
+            app.delay_seconds = 0
+            app.start()
+            begin.assert_called_once()
+            config, points = begin.call_args.args
+            assert set(config['target_names']) == app.search_types
+        selected = {app.target_types[0]}
+        app.active = True
+        app.scanner = Mock()
+        app.apply_search_types(selected)
+        app.scanner.set_target_names.assert_called_once_with(selected)
+        app.active = False
+        app.next_index, app.end_index = 2, 4
+        app.last_config = dict(waypoints=__file__, target_names=app.target_types[1:], timing='pipeline')
+        with patch.object(app, 'start') as restart:
+            app.resume()
+            restart.assert_called_once()
+        assert app.search_types == selected, 'Resume overwrote current selection'
+        app.last_config['waypoints'] = app.fields['waypoints'].get()
+        app.refresh_search_buttons()
+        app.initial_limit = 100
+        app.next_index, app.end_index = 2, 100
+        with patch.object(app, 'resume') as resume, patch.object(app, 'start') as start:
+            app.toggle_button.invoke()
+            resume.assert_called_once()
+            start.assert_not_called()
+            app.restart_button.invoke()
+            start.assert_called_once()
+            assert app.fields['start_index'].get() == '1'
+            assert app.fields['max_points'].get() == '100'
+        app.next_index = app.end_index
+        with patch('pikmin.scan_ui.messagebox.showinfo') as info, patch.object(app, 'start') as start:
+            app.toggle_search()
+            info.assert_called_once()
+            start.assert_not_called()
+        app.waiting_start = True
+        app.refresh_search_buttons()
+        assert '停止' in app.toggle_button['text']
+        app.toggle_button.invoke()
+        assert not app.waiting_start and '開始' in app.toggle_button['text']
         print('Offline scan UI passed: search/sent/hit markers, selection, both previews, image retained after deletion.')
         print('Requested layout:', root.winfo_reqwidth(), root.winfo_reqheight())
     finally:

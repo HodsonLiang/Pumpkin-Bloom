@@ -39,7 +39,7 @@ def advance(a, b, meters):
 
 class Route:
     def __init__(self):
-        self.position = (25.033964, 121.564468)
+        self.position = None
         self.points = []
         self.next_id = 1
         self.index = self.laps = 0
@@ -104,7 +104,7 @@ class Route:
         if self.wait > 0 or self.elapsed + 1e-9 < self.interval:
             return
         target = self.points[self.index][1]
-        point = advance(self.position, target, self.speed/3.6*self.interval)
+        point = target if self.position is None else advance(self.position, target, self.speed/3.6*self.interval)
         send(point)
         self.position = point
         self.elapsed = 0.
@@ -114,7 +114,8 @@ class Route:
     def remaining(self):
         if self.index >= len(self.points):
             return 0., 0.
-        points = [self.position] + [p for _, p in self.points[self.index:]]
+        pending = [p for _, p in self.points[self.index:]]
+        points = [self.position or pending[0]] + pending
         lengths = [distance(a, b) for a, b in zip(points, points[1:])]
         steps = sum(max(1, math.ceil(length/(self.speed/3.6*self.interval))) for length in lengths)
         seconds = max(0, steps*self.interval-self.elapsed) + self.wait + max(0, len(lengths)-1)*self.dwell
@@ -124,6 +125,7 @@ class Route:
 class Device:
     def __init__(self):
         self.process = None
+        self.touched = False
         self.flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
     def release(self):
@@ -136,15 +138,17 @@ class Device:
             self.process = None
 
     def send(self, point):
+        self.touched = True
         self.release()
-        self.process = subprocess.Popen([sys.executable, '-m', 'pymobiledevice3', 'developer', 'dvt',
+        self.process = subprocess.Popen([sys.executable, '-m', 'pikmin.device_cli', 'developer', 'dvt',
             'simulate-location', 'set', '--', *map(str, point)], stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=self.flags)
 
     def reset(self):
         self.release()
-        subprocess.run([sys.executable, '-m', 'pymobiledevice3', 'developer', 'dvt', 'simulate-location', 'clear'],
+        subprocess.run([sys.executable, '-m', 'pikmin.device_cli', 'developer', 'dvt', 'simulate-location', 'clear'],
             check=True, capture_output=True, timeout=20, creationflags=self.flags)
+        self.touched = False
 
 
 class Controller(threading.Thread):
@@ -153,7 +157,7 @@ class Controller(threading.Thread):
         self.commands, self.updates = commands, updates
         self.route = Route()
         self.device = Device()
-        self.status = '待命 · 地圖起點為台北預設座標，並非手機實際位置'
+        self.status = '待命 · 未指定起點時，開始後先傳送至第一個標點'
         self.closed = False
 
     def command(self, kind, value):
@@ -168,6 +172,13 @@ class Controller(threading.Thread):
         elif kind == 'add':
             for point in value:
                 r.add(point)
+        elif kind == 'load':
+            for point in value:
+                validate_point(*point)
+            r.clear()
+            for point in value:
+                r.add(point)
+            self.status = '已載入路線 · 暫停原地'
         elif kind == 'start':
             r.start()
             self.status = '移動中'
@@ -193,7 +204,8 @@ class Controller(threading.Thread):
         elif kind in ('reset', 'close'):
             r.running = False
             try:
-                self.device.reset()
+                if kind == 'reset' or self.device.touched:
+                    self.device.reset()
                 self.status = '已送出還原定位指令 · 地圖仍顯示最後模擬座標'
             finally:
                 if kind == 'close':

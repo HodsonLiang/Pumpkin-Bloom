@@ -7,3 +7,4 @@ tkintermapview==1.30
 Pillow==12.2.0
 opencv-python==4.13.0.92
 numpy==2.4.6
+requests==2.34.2

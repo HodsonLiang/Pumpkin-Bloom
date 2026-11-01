@@ -57,10 +57,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Application dependency check failed.' }
     & $venvPython -m pikmin.preflight
     if ($LASTEXITCODE -ne 0) { throw 'Device command compatibility check failed. See the command error above.' }
-    $localWaypoints = Join-Path $projectRoot 'waypoints.txt'
-    if (-not (Test-Path -LiteralPath $localWaypoints)) {
-        Copy-Item -LiteralPath (Join-Path $projectRoot 'examples\waypoints.txt') -Destination $localWaypoints
-    }
+    & $venvPython -m pikmin.storage
+    if ($LASTEXITCODE -ne 0) { throw 'Coordinate library initialization failed.' }
     Write-Host 'Ready. Connect/unlock the iPhone, then double-click Start.bat.'
 } catch {
     Write-Host ('SETUP ERROR: ' + $_.Exception.Message) -ForegroundColor Red

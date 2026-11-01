@@ -137,11 +137,15 @@ def match_image(image, templates, threshold=.058, *, min_visible=.65, candidates
     return None
 
 
-def check_image_has_target(image_path, templates_folder, threshold=.15):
+def check_image_has_target(image_path, templates_folder, threshold=.15, target_names=None):
     image = read_image(image_path)
     if image is None:
         return False, None
-    result = match_image(image, load_templates(templates_folder), threshold)
+    templates = load_templates(templates_folder)
+    if target_names is not None:
+        selected = {Path(n).stem.casefold() for n in target_names}
+        templates = [t for t in templates if Path(t.name).stem.casefold() in selected]
+    result = match_image(image, templates, threshold)
     if result:
         print(f'Found {result.name}: score={result.score:.4f}, visible={result.visible:.0%}')
         return True, result.name

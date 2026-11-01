@@ -53,6 +53,20 @@ class ScanTests(unittest.TestCase):
         scanner.run()
         self.assertEqual([a[0] for a in self.actions], ['send', 'capture', 'send', 'capture'])
 
+    def test_target_change_applies_to_next_recognition_and_is_recorded(self):
+        selections = []
+        scanner = self.scanner()
+        scanner.set_target_names(['fire'])
+        def recognize(*args, **kwargs):
+            selections.append(kwargs['target_names'])
+            scanner.set_target_names(['water'])
+            return False, None
+        scanner.recognizer = recognize
+        scanner.run()
+        self.assertEqual(selections, [('fire',), ('water',)])
+        records = [json.loads(line) for line in (scanner.folder/'results.jsonl').read_text(encoding='utf-8').splitlines()]
+        self.assertEqual([r['target_names'] for r in records], [['fire'], ['water']])
+
     def test_stop_during_wait_keeps_resume_index(self):
         scanner = self.scanner()
         def stop_wait(_):

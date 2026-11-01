@@ -9,6 +9,7 @@ from tkinter import ttk, messagebox
 from PIL import Image, ImageTk
 from .scan_engine import BASE, ScanDevice
 from .target_history import validate_coords, read_history, path_key, trash_target
+from .storage import write_json
 
 
 class ScanActions:
@@ -39,23 +40,24 @@ class ScanActions:
             key = self.bookmark_key(self.records[int(item)])
             updated.add(key) if enabled else updated.discard(key)
         try:
-            temporary = self.bookmark_file.with_suffix('.tmp')
-            temporary.write_text(json.dumps(sorted(updated), ensure_ascii=False, indent=2), encoding='utf-8')
-            temporary.replace(self.bookmark_file)
+            write_json(self.bookmark_file, sorted(updated))
         except OSError as exc:
             messagebox.showerror('書籤儲存失敗', str(exc))
             return
         self.bookmarks = updated
         for item in selected:
             record = self.records[int(item)]
-            self.table.set(item, 'bookmark', '★' if enabled else '')
-            self.markers[int(item)].set_text(('★ ' if enabled else '')+f"#{record['index']} · {record['target']}")
+            self.table.set(item, 'bookmark', '★' if enabled else '☆')
+            if self.markers[int(item)]:
+                self.markers[int(item)].set_text(('★ ' if enabled else '')+f"#{record['index']} · {record['target']}")
+
+        self.refresh_catalog()
 
     def target_menu(self, parent):
         menu = tk.Menu(parent, tearoff=False)
         for label, command in [('傳送到選取目標', self.teleport_selected), ('開啟原始截圖', self.open_selected),
-                               ('複製選取座標', self.copy_coords), ('加入書籤', lambda: self.set_bookmarks(True)),
-                               ('移除書籤', lambda: self.set_bookmarks(False)), ('匯出命中 CSV', self.export),
+                               ('複製選取座標', self.copy_coords), ('☆ 加入書籤', lambda: self.set_bookmarks(True)),
+                               ('★ 移除書籤', lambda: self.set_bookmarks(False)), ('匯出命中 CSV', self.export),
                                ('全選', self.select_all), ('刪除選取（移至回收區）', self.delete_selected)]:
             menu.add_command(label=label, command=command)
         return menu
@@ -67,12 +69,13 @@ class ScanActions:
         if item not in self.table.selection():
             self.table.selection_set(item)
         self.table.focus(item)
-        menu = self.target_menu(self.table)
+        if not hasattr(self, 'context_menu'):
+            self.context_menu = self.target_menu(self.table)
+        menu = self.context_menu
         try:
             menu.tk_popup(event.x_root, event.y_root)
         finally:
             menu.grab_release()
-            menu.destroy()
         return 'break'
 
     def icon_for(self, target=None):
@@ -130,6 +133,8 @@ class ScanActions:
             messagebox.showerror('座標無效', str(exc))
             return
         self.pending_start = self.pending_reset = False
+        if self.waiting_start:
+            self.cancel_start()
         if self.active:
             self.scanner.stop_event.set()
             self.status.set('先停止掃描並完成辨識收尾，接著傳送到指定位置…')
@@ -139,16 +144,14 @@ class ScanActions:
     def dispatch_teleport(self):
         point, self.pending_teleport = self.pending_teleport, None
         if point is not None:
-            self.run_manual('set', point)
+            self.device_session.ensure(lambda: self.run_manual('set', point))
 
     def run_manual(self, operation, point=None):
         self.manual_busy = True
         if operation == 'set':
             self.manual_active = True  # A failed submission may still need cleanup.
-        self.start_button.configure(state='disabled')
-        self.resume_button.configure(state='disabled')
-        self.stop_button.configure(state='normal')
         self.status.set('正在傳送定位…' if operation=='set' else '正在還原定位…')
+        self.refresh_search_buttons()
         def work():
             error = None
             try:
@@ -175,14 +178,14 @@ class ScanActions:
         if event['error']:
             self.status.set('定位操作失敗，請查看執行紀錄')
             self.append_log(event['error'])
+            if not self.closing:
+                messagebox.showerror('定位操作失敗', event['error'])
         elif event['operation'] == 'set':
             self.handle(dict(kind='position', point=event['point']))
             self.map_widget.set_position(max(-85, min(85, event['point'][0])), event['point'][1])
             self.status.set(f"已送出定位 {event['point'][0]:.6f}, {event['point'][1]:.6f} · 等待裝置更新")
         else:
             self.status.set('已送出還原定位指令')
-        self.start_button.configure(state='normal')
-        self.stop_button.configure(state='normal' if self.manual_active else 'disabled')
         if self.closing:
             if event['operation'] != 'reset':
                 self.run_manual('reset')
@@ -200,30 +203,26 @@ class ScanActions:
             self.pending_start = False
             if not event['error']:
                 self.start()
-        else:
-            self.start_button.configure(state='normal')
-            self.stop_button.configure(state='normal' if self.manual_active else 'disabled')
-            if self.next_index is not None and self.next_index < getattr(self, 'end_index', 0):
-                self.resume_button.configure(state='normal')
+        self.refresh_search_buttons()
         return True
 
     def finish_close(self):
+        self.device_session.close()
         self.manual_executor.shutdown(wait=False)
         self.root.destroy()
 
-    def add_record(self, record):
+    def add_record(self, record, refresh=True):
         key = path_key(record['path'])
         if key in self.known_paths:
             return
         self.known_paths.add(key)
         index = len(self.records)
         self.records.append(record)
-        star = '★' if self.bookmark_key(record) in self.bookmarks else ''
+        star = '★' if self.bookmark_key(record) in self.bookmarks else '☆'
         self.table.insert('', 'end', iid=str(index), values=(star, record['index'], record['target'], f"{record['lat']:.6f}, {record['lon']:.6f}", record['timestamp']))
-        marker = self.map_widget.set_marker(max(-85, min(85, record['lat'])), record['lon'], text=(star+' ' if star else '')+f"#{record['index']} · {record['target']}",
-            icon=self.icon_for(record['target']), icon_anchor='s', marker_color_outside='#338251',
-            command=lambda _, i=index: self.marker_select(i))
-        self.markers.append(marker)
+        self.markers.append(None)
+        if refresh:
+            self.refresh_catalog()
         return index
 
     def load_history(self):
@@ -263,14 +262,17 @@ class ScanActions:
             return
         remaining = [r for i, r in enumerate(self.records) if i not in removed]
         for marker in self.markers:
-            marker.delete()
+            if marker:
+                marker.delete()
         self.markers.clear()
+        for i in range(len(self.records)):
+            self.table.delete(str(i))
         self.records.clear()
         self.known_paths.clear()
-        self.table.delete(*self.table.get_children())
         self.hit_preview.original = None
         self.hit_preview.title.set('命中截圖 · 點選下方結果')
         self.hit_preview.draw()
         for record in remaining:
-            self.add_record(record)
+            self.add_record(record, refresh=False)
+        self.refresh_catalog()
         self.append_log(f'已刪除 {len(removed)} 筆目標；圖片移至 found_targets/.trash，可手動還原。')

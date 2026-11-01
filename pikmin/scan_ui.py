@@ -10,7 +10,13 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 from PIL import Image, ImageTk, ImageOps
-import tkintermapview
+from .world_map import WorldMap
+from .device_session import DeviceSession
+from .waypoint_picker import WaypointPicker
+from .scan_catalog import ScanCatalog
+from tkinter import simpledialog
+from tkinter import font as tkfont
+import math
 from .scan_engine import BASE, DEFAULTS, Scanner, prepare_config
 from .scan_actions import ScanActions
 from .ui_layout import Foldout
@@ -43,7 +49,7 @@ class Preview(ttk.Frame):
         self.canvas.create_image(self.canvas.winfo_width()/2, self.canvas.winfo_height()/2, image=self.photo)
 
 
-class ScanApp(ScanActions):
+class ScanApp(ScanCatalog, ScanActions):
     def __init__(self, root, config=None):
         self.root = root
         self.events = queue.Queue()
@@ -64,6 +70,10 @@ class ScanApp(ScanActions):
         self.active = False
         self.next_index = None
         self.init_actions()
+        self.init_catalog()
+        self.delay_seconds = 0
+        self.waiting_start = False
+        self.start_generation = 0
         root.title('Pikmin · 目標搜尋')
         root.geometry('1380x900')
         root.minsize(1000, 650)
@@ -77,7 +87,7 @@ class ScanApp(ScanActions):
         head = ttk.Frame(outer)
         head.pack(fill='x')
         ttk.Label(head, text='目標搜尋', style='Title.TLabel').pack(side='left')
-        self.status = tk.StringVar(value='待命 · 選擇座標檔後開始搜尋；需先建立 iPhone 連線')
+        self.status = tk.StringVar(value='待命 · 選擇座標檔後開始搜尋；可離線管理資料，開始搜尋時才檢查裝置')
         ttk.Label(head, textvariable=self.status, wraplength=1000).pack(side='left', padx=20)
         self.settings_panel = Foldout(outer, '搜尋設定 · 座標檔與等待時間')
         self.settings_panel.pack(fill='x', pady=4)
@@ -86,12 +96,8 @@ class ScanApp(ScanActions):
         self.fields = {key: tk.StringVar(value=values[key]) for key in DEFAULTS}
         self.setting_widgets = []
         ttk.Label(settings, text='座標檔').grid(row=0, column=0, sticky='w')
-        entry = ttk.Entry(settings, textvariable=self.fields['waypoints'], width=58)
-        entry.grid(row=0, column=1, columnspan=3, sticky='ew', padx=6)
-        self.setting_widgets.append(entry)
-        button = ttk.Button(settings, text='瀏覽…', command=self.browse)
-        button.grid(row=0, column=4)
-        self.setting_widgets.append(button)
+        self.waypoint_picker = WaypointPicker(settings, self.fields['waypoints'])
+        self.waypoint_picker.grid(row=0, column=1, columnspan=4, sticky='ew', padx=6)
         self.timing = tk.StringVar(value='逐點等待後截圖' if values['timing']=='sequential' else '提前傳送（原流程）')
         combo = ttk.Combobox(settings, textvariable=self.timing, values=['提前傳送（原流程）', '逐點等待後截圖'], width=23, state='readonly')
         combo.grid(row=0, column=5, padx=8, sticky='w')
@@ -105,12 +111,13 @@ class ScanApp(ScanActions):
             self.setting_widgets.append(entry)
         controls = ttk.Frame(outer)
         controls.pack(fill='x')
-        self.start_button = ttk.Button(controls, text='▶ 開始搜尋', command=self.start)
-        self.start_button.pack(side='left')
-        self.stop_button = ttk.Button(controls, text='■ 停止並還原定位', command=self.stop, state='disabled')
-        self.stop_button.pack(side='left', padx=6)
-        self.resume_button = ttk.Button(controls, text='從中斷點繼續', command=self.resume, state='disabled')
-        self.resume_button.pack(side='left')
+        self.toggle_button = ttk.Button(controls, text='▶ 開始', command=self.toggle_search)
+        self.toggle_button.pack(side='left')
+        self.restart_button = ttk.Button(controls, text='從頭開始搜尋', command=self.restart_search)
+        self.restart_button.pack(side='left', padx=6)
+        ttk.Button(controls, text='搜尋種類…', command=self.type_dialog).pack(side='left', padx=4)
+        self.delay_button = ttk.Button(controls, text='倒數：立即', command=self.configure_delay)
+        self.delay_button.pack(side='left')
         self.follow = tk.BooleanVar(value=True)
         ttk.Checkbutton(controls, text='跟隨搜尋位置', variable=self.follow).pack(side='left', padx=12)
         ttk.Button(controls, text='回到搜尋位置', command=self.center).pack(side='left')
@@ -118,6 +125,7 @@ class ScanApp(ScanActions):
         self.manual_panel = Foldout(outer, '輸入座標傳送')
         self.manual_panel.pack(fill='x', pady=4)
         self.manual_bar(self.manual_panel.body)
+        ttk.Label(outer, textvariable=self.search_summary, wraplength=1200).pack(anchor='w', pady=(4, 0))
         self.stats = tk.StringVar(value='已掃描 0 / 0　命中 0　錯誤 0')
         ttk.Label(outer, textvariable=self.stats, font=('Microsoft JhengHei UI', 12, 'bold')).pack(anchor='w', pady=(8, 4))
         self.progress = ttk.Progressbar(outer)
@@ -128,7 +136,7 @@ class ScanApp(ScanActions):
         body.add(top, weight=3)
         map_frame = ttk.Frame(top)
         top.add(map_frame, weight=3)
-        self.map_widget = tkintermapview.TkinterMapView(map_frame, width=500, height=310, corner_radius=8)
+        self.map_widget = WorldMap(map_frame, width=500, height=310, corner_radius=8)
         self.map_widget.pack(fill='both', expand=True)
         self.map_widget.set_position(25.033964, 121.564468)
         self.map_widget.set_zoom(8)
@@ -152,6 +160,8 @@ class ScanApp(ScanActions):
         bar.pack(fill='x', pady=(0, 4))
         ttk.Button(bar, text='傳送到選取目標', command=self.teleport_selected).pack(side='left')
         ttk.Button(bar, text='刪除選取目標', command=self.delete_selected).pack(side='left', padx=6)
+        ttk.Button(bar, text='☆ / ★', command=self.toggle_bookmarks).pack(side='left')
+        ttk.Button(bar, text='篩選顯示…', command=lambda: self.type_dialog(False)).pack(side='left', padx=4)
         self.load_button = ttk.Button(bar, text='載入歷史結果', command=self.load_history)
         self.load_button.pack(side='left', padx=6)
         actions = ttk.Menubutton(bar, text='目標操作 ▾')
@@ -163,8 +173,11 @@ class ScanApp(ScanActions):
         columns = ('bookmark', 'index', 'target', 'coords', 'time')
         self.table = ttk.Treeview(table_frame, columns=columns, show='headings', height=5, selectmode='extended')
         for key, title, width in zip(columns, ['書籤', '座標序號', '目標', '緯度, 經度', '截圖時間'], [50, 90, 160, 240, 180]):
-            self.table.heading(key, text=title)
+            self.table.heading(key, text=title, command=lambda k=key: self.sort_targets(k))
             self.table.column(key, width=width)
+        heading_font = tkfont.Font(root=root, font=style.lookup('Treeview.Heading', 'font') or ('Microsoft JhengHei UI', 10))
+        star_width = heading_font.measure('書籤')+8
+        self.table.column('bookmark', width=star_width, minwidth=star_width, stretch=False, anchor='center')
         scroll = ttk.Scrollbar(table_frame, orient='vertical', command=self.table.yview)
         self.table.configure(yscrollcommand=scroll.set)
         scroll.pack(side='right', fill='y')
@@ -172,28 +185,57 @@ class ScanApp(ScanActions):
         self.table.bind('<<TreeviewSelect>>', self.select_hit)
         self.table.bind('<Control-a>', lambda _: (self.select_all(), 'break')[-1])
         self.table.bind('<Button-3>', self.target_context)
+        self.table.bind('<Button-1>', self.star_click)
         self.table.bind('<Delete>', lambda _: self.delete_selected())
         self.log = ScrolledText(logs, height=6, state='disabled', font=('Consolas', 10))
         self.log.pack(fill='both', expand=True)
         ttk.Label(outer, text='目前截圖是最近一次擷取，並非即時串流。提前傳送模式沿用原本延遲假設，標記為搜尋指定座標，並非手機 GPS 回讀。', wraplength=1320).pack(anchor='w', pady=(6, 0))
+        self.device_session = DeviceSession(root, self.stop)
         root.protocol('WM_DELETE_WINDOW', self.close)
         root.after(100, self.poll)
 
-    def browse(self):
-        path = filedialog.askopenfilename(initialdir=BASE, filetypes=[('座標文字檔', '*.txt')])
-        if path:
-            self.fields['waypoints'].set(path)
+    def refresh_search_buttons(self):
+        busy = self.active or self.waiting_start or self.manual_busy or self.manual_active
+        stopping = ((self.active and self.scanner is not None and self.scanner.stop_event.is_set())
+                    or self.pending_reset)
+        self.toggle_button.configure(text='■ 停止' if busy else '▶ 開始',
+                                     state='disabled' if self.closing or stopping else 'normal')
+        self.restart_button.configure(state='disabled' if self.closing or self.active or self.waiting_start or self.manual_busy else 'normal')
+
+    def toggle_search(self):
+        if self.closing:
+            return
+        if self.active or self.waiting_start or self.manual_busy or self.manual_active:
+            self.stop()
+            return
+        same_file = (self.next_index is not None and
+                     Path(self.fields['waypoints'].get()).resolve() == Path(self.last_config['waypoints']).resolve())
+        if same_file:
+            if self.next_index >= self.end_index:
+                messagebox.showinfo('搜尋已完成', '這份座標已搜尋完畢；要重新搜尋請按「從頭開始搜尋」。')
+            else:
+                self.resume()
+        else:
+            self.start()
+
+    def restart_search(self):
+        if self.closing or self.active or self.waiting_start or self.manual_busy:
+            return
+        if (self.next_index is not None and
+                Path(self.fields['waypoints'].get()).resolve() == Path(self.last_config['waypoints']).resolve()):
+            self.fields['max_points'].set(getattr(self, 'initial_limit', self.last_config.get('max_points', self.fields['max_points'].get())))
+        self.fields['start_index'].set(1)
+        self.start()
 
     def set_busy(self, busy):
         self.active = busy
-        self.start_button.configure(state='disabled' if busy else 'normal')
-        self.stop_button.configure(state='normal' if busy else 'disabled')
-        self.resume_button.configure(state='disabled')
+        self.waypoint_picker.set_enabled(not busy)
+        self.refresh_search_buttons()
         for widget in self.setting_widgets:
             widget.configure(state='disabled' if busy else ('readonly' if isinstance(widget, ttk.Combobox) else 'normal'))
 
     def start(self):
-        if self.active or self.closing or self.manual_busy:
+        if self.active or self.waiting_start or self.closing or self.manual_busy:
             return
         if self.manual_active:
             self.pending_start = True
@@ -208,6 +250,49 @@ class ScanApp(ScanActions):
         except (OSError, ValueError) as exc:
             messagebox.showerror('請檢查設定', str(exc))
             return
+        if not self.search_types:
+            messagebox.showerror('請選擇目標', '至少選一種搜尋目標。')
+            return
+        config['target_names'] = sorted(self.search_types)
+        self.waiting_start = True
+        self.refresh_search_buttons()
+        self.start_generation += 1
+        generation = self.start_generation
+        deadline = time.monotonic()+self.delay_seconds
+        def ready():
+            if self.closing or generation != self.start_generation:
+                return
+            self.waiting_start = False
+            config['target_names'] = sorted(self.search_types)
+            self.begin_scan(config, points)
+        def countdown():
+            if self.closing or generation != self.start_generation:
+                return
+            remaining = math.ceil(deadline-time.monotonic())
+            if remaining > 0:
+                self.status.set(f'倒數 {remaining} 秒後開始搜尋')
+                self.root.after(200, countdown)
+            else:
+                self.status.set('正在準備裝置連線…')
+                self.device_session.ensure(ready, self.cancel_start)
+        countdown()
+
+    def configure_delay(self):
+        value = simpledialog.askinteger('倒數搜尋', '按開始後等待幾秒？（0 為立即）', initialvalue=self.delay_seconds, minvalue=0, maxvalue=86400, parent=self.root)
+        if value is not None:
+            self.delay_seconds = value
+            self.delay_button.configure(text=f'倒數：{value} 秒' if value else '倒數：立即')
+
+    def cancel_start(self):
+        self.start_generation += 1
+        self.waiting_start = False
+        self.device_session.cancel_pending()
+        self.status.set('待命 · 已取消啟動')
+        self.refresh_search_buttons()
+
+    def begin_scan(self, config, points):
+        if self.next_index is None or config['waypoints'] != getattr(self, 'last_config', {}).get('waypoints'):
+            self.initial_limit = config['max_points']
         self.last_config = config
         self.end_index = config['start_index']+len(points)
         for marker in (self.current_marker, self.sent_marker):
@@ -233,19 +318,24 @@ class ScanApp(ScanActions):
         self.status.set('正在啟動搜尋…')
 
     def stop(self):
+        if self.waiting_start:
+            self.cancel_start()
         self.pending_teleport = None
         self.pending_start = False
         if self.active:
             self.scanner.stop_event.set()
-            self.stop_button.configure(state='disabled')
             self.status.set('正在停止 · 等待目前指令結束並儲存辨識結果')
         elif self.manual_busy:
             self.pending_reset = True
         elif self.manual_active:
             self.run_manual('reset')
+        self.refresh_search_buttons()
 
     def resume(self):
         if self.next_index is not None:
+            if not Path(self.last_config['waypoints']).is_file():
+                messagebox.showerror('無法繼續', '原搜尋座標檔已移動或刪除。請重新選檔後開始搜尋。')
+                return
             for key, value in self.last_config.items():
                 if key in self.fields:
                     self.fields[key].set(value)
@@ -299,7 +389,7 @@ class ScanApp(ScanActions):
             self.append_log(f'圖片無法讀取：{exc}')
 
     def marker_select(self, index):
-        if not self.table.exists(str(index)):
+        if str(index) not in self.table.get_children():
             return
         self.table.selection_set(str(index))
         self.table.see(str(index))
@@ -337,7 +427,8 @@ class ScanApp(ScanActions):
         elif kind == 'history':
             for record in event['records']:
                 if Path(record['path']).is_file():
-                    self.add_record(record)
+                    self.add_record(record, refresh=False)
+            self.refresh_catalog()
         elif kind == 'history_done':
             self.history_busy = False
             self.load_button.configure(state='normal')
@@ -400,13 +491,14 @@ class ScanApp(ScanActions):
         elif kind == 'log':
             self.append_log(event['text'])
         elif kind == 'done':
+            if '失敗' in event['text'] and not self.closing:
+                messagebox.showerror('搜尋失敗', event['text'])
             self.set_busy(False)
             self.status.set(event['text'])
             self.append_log(event['text'])
             self.hits, self.errors = event['hits'], event['errors']
             self.next_index = event['next_index']
-            if self.next_index < self.end_index:
-                self.resume_button.configure(state='normal')
+            self.refresh_search_buttons()
             if self.closing:
                 if '失敗' in event['text']:
                     messagebox.showwarning('關閉前請確認', event['text'])
@@ -417,6 +509,11 @@ class ScanApp(ScanActions):
         return True
 
     def poll(self):
+        stop_file = os.environ.get('PIKMIN_STOP_FILE')
+        if stop_file and Path(stop_file).exists() and not self.closing:
+            self.close()
+            if not self.root.winfo_exists():
+                return
         for _ in range(50):
             try:
                 event = self.events.get_nowait()
@@ -434,6 +531,7 @@ class ScanApp(ScanActions):
         self.root.after(100, self.poll)
 
     def close(self):
+        self.cancel_start()
         self.closing = True
         self.pending_teleport = None
         self.pending_start = False

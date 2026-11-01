@@ -35,3 +35,9 @@ Desktop.ini
 
 /target_bookmarks.json
 /target_bookmarks.tmp
+
+# Local coordinate libraries, country archives and process signals.
+/data/
+/india.txt
+/worldcities.csv
+/india_villages/

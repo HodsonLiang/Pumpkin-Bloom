@@ -63,6 +63,8 @@ class VisionTests(unittest.TestCase):
         path = self.folder/'截圖.png'
         cv2.imencode('.png', image)[1].tofile(path)
         self.assertEqual(check_image_has_target(path, self.folder, .02), (True, 'target.png'))
+        self.assertEqual(check_image_has_target(path, self.folder, .02, target_names=['missing']), (False, None))
+        self.assertEqual(check_image_has_target(path, self.folder, .02, target_names=['target']), (True, 'target.png'))
 
 
 if __name__ == '__main__':
