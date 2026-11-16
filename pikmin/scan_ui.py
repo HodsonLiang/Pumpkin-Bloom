@@ -17,7 +17,7 @@ from .scan_catalog import ScanCatalog
 from tkinter import simpledialog
 from tkinter import font as tkfont
 import math
-from .scan_engine import BASE, DEFAULTS, Scanner, prepare_config
+from .scan_engine import BASE, DEFAULTS, Scanner, ScanDevice, prepare_config
 from .scan_actions import ScanActions
 from .ui_layout import Foldout
 
@@ -190,22 +190,23 @@ class ScanApp(ScanCatalog, ScanActions):
         self.log = ScrolledText(logs, height=6, state='disabled', font=('Consolas', 10))
         self.log.pack(fill='both', expand=True)
         ttk.Label(outer, text='目前截圖是最近一次擷取，並非即時串流。提前傳送模式沿用原本延遲假設，標記為搜尋指定座標，並非手機 GPS 回讀。', wraplength=1320).pack(anchor='w', pady=(6, 0))
-        self.device_session = DeviceSession(root, self.stop)
+        self.device_session = DeviceSession(root, self.device_disconnected, self.handle)
         root.protocol('WM_DELETE_WINDOW', self.close)
         root.after(100, self.poll)
 
     def refresh_search_buttons(self):
-        busy = self.active or self.waiting_start or self.manual_busy or self.manual_active
+        busy = self.active or self.waiting_start or self.manual_busy or self.manual_preparing
         stopping = ((self.active and self.scanner is not None and self.scanner.stop_event.is_set())
                     or self.pending_reset)
-        self.toggle_button.configure(text='■ 停止' if busy else '▶ 開始',
+        resumable = self.next_index is not None and self.next_index < getattr(self, 'end_index', 0)
+        self.toggle_button.configure(text='■ 停止' if busy else ('▶ 繼續搜尋' if resumable else '▶ 開始'),
                                      state='disabled' if self.closing or stopping else 'normal')
-        self.restart_button.configure(state='disabled' if self.closing or self.active or self.waiting_start or self.manual_busy else 'normal')
+        self.restart_button.configure(state='disabled' if self.closing or self.active or self.waiting_start or self.manual_busy or self.manual_preparing else 'normal')
 
     def toggle_search(self):
         if self.closing:
             return
-        if self.active or self.waiting_start or self.manual_busy or self.manual_active:
+        if self.active or self.waiting_start or self.manual_busy or self.manual_preparing:
             self.stop()
             return
         same_file = (self.next_index is not None and
@@ -219,7 +220,7 @@ class ScanApp(ScanCatalog, ScanActions):
             self.start()
 
     def restart_search(self):
-        if self.closing or self.active or self.waiting_start or self.manual_busy:
+        if self.closing or self.active or self.waiting_start or self.manual_busy or self.manual_preparing:
             return
         if (self.next_index is not None and
                 Path(self.fields['waypoints'].get()).resolve() == Path(self.last_config['waypoints']).resolve()):
@@ -235,7 +236,7 @@ class ScanApp(ScanCatalog, ScanActions):
             widget.configure(state='disabled' if busy else ('readonly' if isinstance(widget, ttk.Combobox) else 'normal'))
 
     def start(self):
-        if self.active or self.waiting_start or self.closing or self.manual_busy:
+        if self.active or self.waiting_start or self.closing or self.manual_busy or self.manual_preparing:
             return
         if self.manual_active:
             self.pending_start = True
@@ -312,12 +313,16 @@ class ScanApp(ScanCatalog, ScanActions):
         self.next_index = config['start_index']
         self.started = time.monotonic()
         self.elapsed = 0.
+        self.scanner = Scanner(config, points, self.events,
+                               device=ScanDevice(udid=self.device_session.prepared_id))
         self.set_busy(True)
-        self.scanner = Scanner(config, points, self.events)
         self.scanner.start()
         self.status.set('正在啟動搜尋…')
 
-    def stop(self):
+    def stop(self, reset_manual=True):
+        self.manual_preparing = False
+        self.device_session.cancel_pending()
+        self.start_generation += 1
         if self.waiting_start:
             self.cancel_start()
         self.pending_teleport = None
@@ -325,14 +330,26 @@ class ScanApp(ScanCatalog, ScanActions):
         if self.active:
             self.scanner.stop_event.set()
             self.status.set('正在停止 · 等待目前指令結束並儲存辨識結果')
-        elif self.manual_busy:
+        elif self.manual_busy and reset_manual:
             self.pending_reset = True
-        elif self.manual_active:
+        elif self.manual_active and reset_manual:
             self.run_manual('reset')
         self.refresh_search_buttons()
 
+    def device_disconnected(self):
+        # Keep the search checkpoint, but cancel every deferred device action.
+        self.device_session.prepared_id = None
+        self.stop(reset_manual=False)
+        self.pending_reset = False
+        if self.manual_busy:
+            self.pending_release = True
+        if self.manual_active and not self.manual_busy:
+            self.run_manual('release')
+
     def resume(self):
         if self.next_index is not None:
+            if self.next_index >= self.end_index:
+                return
             if not Path(self.last_config['waypoints']).is_file():
                 messagebox.showerror('無法繼續', '原搜尋座標檔已移動或刪除。請重新選檔後開始搜尋。')
                 return
@@ -493,11 +510,11 @@ class ScanApp(ScanCatalog, ScanActions):
         elif kind == 'done':
             if '失敗' in event['text'] and not self.closing:
                 messagebox.showerror('搜尋失敗', event['text'])
+            self.next_index = event['next_index']
             self.set_busy(False)
             self.status.set(event['text'])
             self.append_log(event['text'])
             self.hits, self.errors = event['hits'], event['errors']
-            self.next_index = event['next_index']
             self.refresh_search_buttons()
             if self.closing:
                 if '失敗' in event['text']:

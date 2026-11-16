@@ -17,6 +17,7 @@ class ScanActions:
         self.manual_device = ScanDevice()
         self.manual_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='manual-gps')
         self.manual_busy = self.manual_active = False
+        self.manual_preparing = self.pending_release = False
         self.pending_teleport = None
         self.pending_start = self.pending_reset = False
         self.history_busy = False
@@ -127,6 +128,9 @@ class ScanActions:
     def request_teleport(self, point):
         if self.closing:
             return
+        self.device_session.cancel_pending()
+        self.start_generation += 1
+        self.manual_preparing = False
         try:
             self.pending_teleport = validate_coords(*point)
         except ValueError as exc:
@@ -144,13 +148,32 @@ class ScanActions:
     def dispatch_teleport(self):
         point, self.pending_teleport = self.pending_teleport, None
         if point is not None:
-            self.device_session.ensure(lambda: self.run_manual('set', point))
+            generation = self.start_generation
+            self.manual_preparing = True
+            self.refresh_search_buttons()
+            def ready():
+                if self.closing or generation != self.start_generation:
+                    return
+                self.manual_preparing = False
+                if self.manual_device.udid != self.device_session.prepared_id:
+                    if self.manual_device.process is not None:
+                        self.pending_teleport = point
+                        self.run_manual('release')
+                        return
+                    self.manual_device = ScanDevice(udid=self.device_session.prepared_id)
+                self.run_manual('set', point)
+            def failed():
+                if generation == self.start_generation:
+                    self.manual_preparing = False
+                    self.refresh_search_buttons()
+            self.device_session.ensure(ready, failed)
 
     def run_manual(self, operation, point=None):
         self.manual_busy = True
         if operation == 'set':
             self.manual_active = True  # A failed submission may still need cleanup.
-        self.status.set('正在傳送定位…' if operation=='set' else '正在還原定位…')
+        self.status.set({'set': '正在傳送定位…', 'reset': '正在還原定位…',
+                         'release': '正在釋放舊裝置連線…'}[operation])
         self.refresh_search_buttons()
         def work():
             error = None
@@ -164,6 +187,8 @@ class ScanActions:
                         except subprocess.TimeoutExpired:
                             pass
                     self.manual_device.check()
+                elif operation == 'release':
+                    self.manual_device.release()
                 else:
                     self.manual_device.reset()
             except Exception as exc:
@@ -173,7 +198,11 @@ class ScanActions:
 
     def handle_manual_done(self, event):
         self.manual_busy = False
-        if event['operation'] == 'reset' and not event['error']:
+        if self.pending_release and not self.closing:
+            self.pending_release = self.pending_reset = False
+            self.run_manual('release')
+            return True
+        if event['operation'] in ('reset', 'release') and not event['error']:
             self.manual_active = False
         if event['error']:
             self.status.set('定位操作失敗，請查看執行紀錄')
@@ -184,6 +213,8 @@ class ScanActions:
             self.handle(dict(kind='position', point=event['point']))
             self.map_widget.set_position(max(-85, min(85, event['point'][0])), event['point'][1])
             self.status.set(f"已送出定位 {event['point'][0]:.6f}, {event['point'][1]:.6f} · 等待裝置更新")
+        elif event['operation'] == 'release':
+            self.status.set('已釋放舊裝置連線 · 搜尋進度已保留')
         else:
             self.status.set('已送出還原定位指令')
         if self.closing:

@@ -1,5 +1,10 @@
 name: Offline tests
 on: [push, pull_request]
+permissions:
+  contents: read
+concurrency:
+  group: offline-tests-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   windows:
     runs-on: windows-latest

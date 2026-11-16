@@ -4,7 +4,6 @@ Set-Location -LiteralPath $projectRoot
 
 function Find-Python311 {
     $candidates = @(
-        (Join-Path $projectRoot 'python11\python.exe'),
         (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python311\python.exe'),
         (Join-Path $env:ProgramFiles 'Python311\python.exe')
     )
@@ -27,6 +26,7 @@ function Find-Python311 {
 }
 
 try {
+    Write-Host 'Close running Pikmin windows and old tunneld before updating. Setup does not require an iPhone.'
     $venvPython = Join-Path $projectRoot 'myenv\Scripts\python.exe'
     if (-not (Test-Path -LiteralPath $venvPython)) {
         $basePython = Find-Python311
@@ -53,7 +53,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed. Check Internet access and the pip error above.' }
     & $venvPython -m pip check
     if ($LASTEXITCODE -ne 0) { throw 'Dependency conflicts detected; see pip check output above.' }
-    & $venvPython -c "import tkinter, tkintermapview, PIL, cv2; from pymobiledevice3.tunneld.api import TUNNELD_DEFAULT_ADDRESS; import pikmin.scan_ui, pikmin.fly_ui; print('Application imports OK')"
+    & $venvPython -c "import tkinter, tkintermapview, PIL, cv2; from pymobiledevice3.tunneld.api import TUNNELD_DEFAULT_ADDRESS; import launcher, pikmin.scan_ui, pikmin.fly_ui; print('Application imports OK')"
     if ($LASTEXITCODE -ne 0) { throw 'Application dependency check failed.' }
     & $venvPython -m pikmin.preflight
     if ($LASTEXITCODE -ne 0) { throw 'Device command compatibility check failed. See the command error above.' }

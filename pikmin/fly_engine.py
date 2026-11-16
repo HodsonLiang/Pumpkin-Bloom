@@ -123,7 +123,8 @@ class Route:
 
 
 class Device:
-    def __init__(self):
+    def __init__(self, udid=None):
+        self.udid = udid
         self.process = None
         self.touched = False
         self.flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
@@ -141,14 +142,17 @@ class Device:
         self.touched = True
         self.release()
         self.process = subprocess.Popen([sys.executable, '-m', 'pikmin.device_cli', 'developer', 'dvt',
-            'simulate-location', 'set', '--', *map(str, point)], stdin=subprocess.PIPE,
+            'simulate-location', 'set', *self.device_options(), '--', *map(str, point)], stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=self.flags)
 
     def reset(self):
         self.release()
-        subprocess.run([sys.executable, '-m', 'pikmin.device_cli', 'developer', 'dvt', 'simulate-location', 'clear'],
+        subprocess.run([sys.executable, '-m', 'pikmin.device_cli', 'developer', 'dvt', 'simulate-location', 'clear', *self.device_options()],
             check=True, capture_output=True, timeout=20, creationflags=self.flags)
         self.touched = False
+
+    def device_options(self):
+        return ['--udid', self.udid] if self.udid else []
 
 
 class Controller(threading.Thread):

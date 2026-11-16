@@ -1,91 +1,55 @@
 # Pikmin Mushroom 控制台
 
-Windows 桌面工具，透過 pymobiledevice3 操作 iPhone 模擬定位，提供路徑移動與截圖辨識兩種模式。
+Windows 桌面工具，透過 pymobiledevice3 操作 iPhone／iPad 模擬定位，提供路徑移動、目標搜尋與座標產生。
 
-- **路徑移動**：地圖標點、速度與傳送間隔設定、剩餘時間、循環路線、暫停與路線匯入／匯出。
-- **目標搜尋**：依座標清單傳送與截圖，地圖顯示搜尋點及命中點，預覽截圖、匯出結果、停止後續掃。
-- **座標產生**：從 Geoapify 下載各國城市、城鎮、村莊及聚落，快取後可離線產生座標。
+## 安裝與更新
 
-## 第一次使用
+支援 **Windows 10/11 x64、Python 3.11**。
 
-1. 從 GitHub 的 **Code → Download ZIP** 下載並完整解壓縮，或使用 Git clone。不要直接在 ZIP 中啟動。
-2. 雙擊 **`Setup.bat`**。它會尋找 Python 3.11 64-bit；沒有 Python 時，透過 Windows 的 WinGet 安裝，再建立 `myenv`、安裝依賴與驗證環境。需要網路。
-3. 連接並解鎖 iPhone，信任這台電腦，確認開發者模式已開啟。
-4. 雙擊 **`Start.bat`**，接受 Windows 管理員授權。選擇模式並啟動；在開啟的地圖／搜尋視窗按開始。
+1. 下載 GitHub 原始碼 ZIP 並完整解壓縮，或使用 Git clone。
+2. 雙擊 **Setup.bat** 安裝或更新環境，需要網路。它會尋找 Python 3.11 64 位元；沒有時透過 WinGet 安裝，接著建立或重用 `myenv`，安裝依賴並驗證指令。
+3. 連接並解鎖 iPhone／iPad，信任電腦並開啟開發者模式。電腦需安裝 Apple Devices 或 iTunes 提供的 USB 驅動。
+4. 雙擊 **Start.bat**，接受 Windows 管理員授權。選擇模式並啟動，再於地圖／搜尋視窗按開始。
 
-不用自行開兩個終端機，也不用手動啟用虛擬環境。管理員授權仍由 Windows 顯示。
+更新前先關閉舊的控制台、搜尋、移動視窗及 tunneld；更新後重新啟動。Setup 不會刪除座標、結果或設定，也不會操作手機定位。不需要手動啟用 Python 環境或自行啟動 tunneld。
 
-支援目標為 **Windows 10/11 x64 + Python 3.11**。本專案的啟動、安裝與停止流程使用 Windows 工具，尚未支援 macOS/Linux。裝置連線需有可用的 Apple USB 驅動程式；若電腦無法辨識 iPhone，請先安裝／修復 Apple Devices 或 iTunes 並完成信任配對。pymobiledevice3 的裝置限制與驅動說明以[官方文件](https://github.com/doronz88/pymobiledevice3)為準。
+沒有 WinGet 時，可安裝 [Python 3.11.9 Windows 64-bit](https://www.python.org/downloads/release/python-3119/)（保留 Tcl/Tk），再執行 Setup。裝置與驅動要求參考 [pymobiledevice3 官方說明](https://github.com/doronz88/pymobiledevice3)。目前不支援 macOS／Linux。
 
-若沒有 WinGet，安裝 [Python 3.11.9 Windows 64-bit](https://www.python.org/downloads/release/python-3119/)（保留 Tcl/Tk 選項），再執行 `Setup.bat`。WinGet 安裝參數見 [Microsoft 文件](https://learn.microsoft.com/en-us/windows/package-manager/winget/install)。安裝程式只建立本專案環境，不會自動刪除既有環境。
+## 功能與操作說明
 
-## 座標與圖片
+- **路徑移動**：地圖標點、速度與間隔、循環、暫停、匯入／匯出路線。[操作說明](docs/movement.md)
+- **目標搜尋**：依座標清單定位、截圖辨識、預覽命中圖片、書籤、歷史結果及停止後續掃。[操作說明](docs/scanning.md)
+- **座標產生**：選擇國家與聚落種類，下載 Geoapify 資料並快取，之後可離線生成座標。[資料說明](docs/data.md)
 
-首次安裝會建立 `data/waypoints/waypoints.pikscan` 示範座標（台北附近三點）。搜尋介面以此資料夾的下拉選單選檔；「匯入…」可將舊版每行 `緯度,經度` 的 TXT 複製轉換為新格式，原檔不會被覆寫。
+三個視窗可在未連接裝置時開啟；開始搜尋、傳送或移動時才準備裝置連線。地圖圖磚、首次下載國家資料與未掛載的開發者映像仍可能需要網路。
 
-- `data/waypoints/*.pikscan`：搜尋座標。
-- `data/routes/*.pikroute`：移動路線的所有標點。
-- `data/cache/geoapify/<country>.zip`：國家資料快取。
+搜尋預設先傳送下一點再截圖，也可改成逐點等待後截圖。定位與圖片內容受裝置及遊戲載入時間影響，地圖標記不是手機 GPS 回讀。
 
-辨識範本放在 `mushroom_pics/`；程式開啟時讀取 PNG 種類，可在「搜尋種類…」勾選。個人座標、截圖及快取都排除 Git 與公開 ZIP。詳細格式見[資料說明](docs/data.md)。
+## 資料放在哪裡
 
-## 使用說明
+| 路徑 | 內容 |
+| --- | --- |
+| `data/waypoints/*.pikscan` | 搜尋座標；安裝時僅在空座標庫建立台北附近三點示範 |
+| `data/routes/*.pikroute` | 移動路線 |
+| `data/cache/` | 國家資料與地圖快取 |
+| `mushroom_pics/` | 搜尋辨識用的透明 PNG 範本 |
+| `found_targets/` | 命中截圖，`.trash/` 為專案回收區 |
+| `scan_sessions/` | 搜尋設定、結果及最後截圖 |
+| `launcher_settings.json`、`target_bookmarks.json` | 本機設定與書籤 |
 
-- [路徑移動](docs/movement.md)
-- [目標搜尋、截圖與結果存檔](docs/scanning.md)
-- [資料格式與選用資料集](docs/data.md)
+搜尋器的「匯入…」可將每行 `緯度,經度` 的舊 TXT 複製轉換為新格式，原檔保留。新加入辨識範本後，重新開啟搜尋器更新種類清單。個人資料與快取不納入 Git 或發布 ZIP。
 
-掃描預設保留原本「提前傳送下一點再截圖」的時序，也能選「逐點等待後截圖」。定位和圖片內容仍受手機／遊戲載入速度影響，地圖標記不是手機 GPS 回讀。
+## 連線問題
 
-## 專案結構
+- **找不到裝置**：確認已解鎖、信任電腦，資料線可傳輸資料，Apple USB 驅動可辨識裝置。
+- **停在準備連線**：介面會顯示映像檢查、準備或等待通道等步驟；查看「執行紀錄」取得錯誤。已掛載的開發者映像會略過下載；未掛載時準備最多等待 90 秒，通道最多等待 30 秒。
+- **iOS／iPadOS 27.2 截圖或服務拒絕連線**：本專案固定使用含相容性修正的 pymobiledevice3 11.15.5。執行 Setup 更新後，須重新啟動舊程式與 tunneld。
+- **斷線後**：搜尋會停止收尾，移動會暫停；重新接上不會自行恢復。
 
-```text
-Setup.bat / Start.bat    建立環境／開啟控制台
-launcher.py             控制台與子程式管理
-fly.py / main.py        移動／搜尋入口
-pikmin/                 介面、裝置流程、辨識及座標產生
-tests/                  不連接手機的回歸與介面測試
-scripts/                安裝與乾淨原始碼打包
-docs/                   操作文件
-examples/               可匯入的示範文字座標
-data/                   本機座標、路線與國家快取（不公開）
-mushroom_pics/           實際使用的辨識範本
-```
+Setup 只處理電腦端環境，無法代替裝置上的信任與開發者模式設定。
 
-## 開發與驗證
+## 專案維護
 
-`pymobiledevice3 9.32.0` 的定位／截圖指令使用舊版 `csfield` API，因此固定搭配 `construct-typing 0.7.0`。`0.8.x` 雖然可能通過 `pip check`，載入 developer 指令仍會出現 `DataclassFieldError`。安裝程式現在會實際載入連線、設定定位、清除定位與截圖指令的 `--help`，不會操作手機。
+程式在 `pikmin/`，三個入口是 `launcher.py`、`main.py`、`fly.py`；安裝、啟動與打包腳本集中於 `scripts/`。`tests/` 保留離線回歸、介面檢查及選用效能測試。
 
-既有環境遇到此錯誤可重新執行 `Setup.bat`，或執行：
-
-```powershell
-.\myenv\Scripts\python.exe -m pip install -r requirements.txt -c requirements-lock.txt
-.\myenv\Scripts\python.exe -m pikmin.preflight
-```
-
-從專案根目錄執行：
-
-```powershell
-.\myenv\Scripts\python.exe -m unittest discover -s tests -v
-.\myenv\Scripts\python.exe -m tests.check_fly_ui
-.\myenv\Scripts\python.exe -m tests.check_scan_ui
-.\myenv\Scripts\python.exe -m tests.check_launcher_ui
-```
-
-測試使用模擬裝置，不會操作手機。GitHub Actions 也會執行上述測試。`requirements.txt` 列出直接依賴；`requirements-lock.txt` 固定已在全新 Windows x64 / Python 3.11 環境驗證的完整依賴版本，安裝程式與 CI 會一起使用。更新依賴時請在乾淨環境重新解析、驗證並更新鎖定檔。
-
-手動安裝（已安裝 Python 3.11）：
-
-```powershell
-py -3.11 -m venv myenv
-.\myenv\Scripts\python.exe -m pip install -r requirements.txt -c requirements-lock.txt
-.\myenv\Scripts\python.exe -m pikmin.storage
-```
-
-### 裝置連線狀態
-
-啟動器、搜尋器及移動器都可在沒有 iOS 裝置時開啟。裝置連接或斷開時彈出提醒；開始搜尋、傳送或移動時才檢查裝置、準備開發者映像及 tunneld，沒有裝置時顯示提示。搜尋中斷線會停止收尾，移動中斷線會暫停；重新接上不會自動恢復操作。
-
-開發者映像首次準備可能需要網路（包括 Apple 簽署服務）；最多等待 90 秒，通道最多等待 30 秒。離線開啟指不需要連接手機；新地圖圖磚及首次下載國家資料仍需要網路。
-
-Setup 只安裝電腦端 Python 依賴，無法代替裝置上的「信任此電腦」、開發者模式及 Apple USB 驅動安裝。新電腦無法偵測裝置時，請確認資料線可傳輸資料、裝置已解鎖，並安裝／修復 Apple Devices 或 iTunes 的驅動。成功的 HTTP 健康查詢不再顯示於執行紀錄；真正的錯誤仍會保留。
+測試指令、依賴更新、實機驗收、Git 規則、打包及可清理檔案，統一見 [開發與維護說明](docs/development.md)。

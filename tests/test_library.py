@@ -12,6 +12,17 @@ import queue
 
 
 class LibraryTests(unittest.TestCase):
+    def test_coordinate_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'points.txt'
+            path.write_text('\ufeff25.03,121.56\n\n-90,-180\n', encoding='utf-8')
+            self.assertEqual(len(storage.read_points(path)), 2)
+            for content in ('nan,12', '91,1', '1,181', 'bad', ''):
+                path.write_text(content, encoding='utf-8')
+                with self.assertRaises(ValueError):
+                    storage.read_points(path)
+
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

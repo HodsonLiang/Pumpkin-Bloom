@@ -38,6 +38,24 @@ def tunnels():
     return data
 
 
+def developer_image_mounted():
+    result = subprocess.run([str(PYTHON), '-m', 'pikmin.device_cli', 'mounter', 'list'],
+                            capture_output=True, text=True, encoding='utf-8', errors='replace',
+                            timeout=10, creationflags=HIDDEN)
+    if result.returncode:
+        raise RuntimeError('無法檢查開發者映像：'+(result.stderr or result.stdout)[-600:])
+    try:
+        images = json.loads(result.stdout)
+        if not isinstance(images, list):
+            raise ValueError()
+        return any(image.get('IsMounted') is True and
+                   (image.get('MountPath') == '/System/Developer' or
+                    image.get('PersonalizedImageType') == 'DeveloperDiskImage' or
+                    image.get('DiskImageType') == 'Developer') for image in images)
+    except (ValueError, AttributeError):
+        raise RuntimeError('開發者映像查詢回傳格式錯誤。') from None
+
+
 def kill_tree(process):
     if process and process.poll() is None:
         subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
@@ -45,12 +63,8 @@ def kill_tree(process):
         process.wait(timeout=5)
 
 
-class DeviceBackend:
-    def __init__(self, cancel=None):
-        self.events = queue.Queue()
-        self.cancel = cancel or threading.Event()
-        self.process = self.tunnel = None
-
+class ProcessRunner:
+    """Shared child-process output handling for the launcher and device setup."""
     def emit(self, text):
         self.events.put(('log', text))
 
@@ -69,23 +83,34 @@ class DeviceBackend:
         threading.Thread(target=read, daemon=True).start()
         return process
 
+
+class DeviceBackend(ProcessRunner):
+    def __init__(self, cancel=None):
+        self.events = queue.Queue()
+        self.cancel = cancel or threading.Event()
+        self.process = self.tunnel = None
+
     def connect(self):
         ids = device_ids()
         if len(ids) != 1:
             raise RuntimeError('未連接裝置或連接多台裝置；請只連接一台 iOS 裝置後重試。')
-        self.events.put(('status', '準備開發者映像 · 請解鎖裝置並確認信任與開發者模式'))
-        mount = self.spawn(['-m', 'pikmin.device_cli', 'mounter', 'auto-mount'])
-        deadline = time.monotonic() + 90
-        try:
-            while mount.poll() is None:
-                if self.cancel.wait(.2):
-                    return False
-                if time.monotonic() >= deadline:
-                    raise RuntimeError('開發者映像準備逾時；請檢查網路、解鎖與信任配對後重試。')
-            if mount.returncode:
-                raise RuntimeError('開發者映像準備失敗；請查看上方原始錯誤。Mux／SavePairRecord 錯誤屬於電腦端配對服務，不代表未開啟開發者模式。')
-        finally:
-            kill_tree(mount)
+        self.events.put(('status', '檢查已掛載的開發者映像…'))
+        if developer_image_mounted():
+            self.emit('開發者映像已掛載，略過下載與重複掛載。')
+        else:
+            self.events.put(('status', '準備開發者映像 · 可能需要下載，最長等待 90 秒'))
+            mount = self.spawn(['-m', 'pikmin.device_cli', 'mounter', 'auto-mount'])
+            deadline = time.monotonic() + 90
+            try:
+                while mount.poll() is None:
+                    if self.cancel.wait(.2):
+                        return False
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError('開發者映像準備逾時；請檢查網路、解鎖與信任配對後重試。')
+                if mount.returncode or not developer_image_mounted():
+                    raise RuntimeError('開發者映像準備失敗；請查看原始錯誤，並檢查網路、解鎖與信任配對。')
+            finally:
+                kill_tree(mount)
         if self.cancel.is_set():
             return False
         try:

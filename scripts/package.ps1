@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 Add-Type -AssemblyName System.IO.Compression
-$files = @('README.md', 'requirements.txt', 'requirements-lock.txt', '.gitignore', '.gitattributes', 'Setup.bat', 'Start.bat', 'start_launcher.ps1', 'launcher.py', 'main.py', 'fly.py')
+$files = @('README.md', 'requirements.txt', 'requirements-lock.txt', '.gitignore', '.gitattributes', 'Setup.bat', 'Start.bat', 'launcher.py', 'main.py', 'fly.py')
 $folders = @{'pikmin'=@('.py'); 'tests'=@('.py'); 'scripts'=@('.ps1'); 'docs'=@('.md'); 'examples'=@('.txt'); 'mushroom_pics'=@('.png'); '.github'=@('.yml', '.yaml')}
 foreach ($folder in $folders.Keys) {
     $folderPath = Join-Path $projectRoot $folder

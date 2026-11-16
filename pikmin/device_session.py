@@ -5,12 +5,16 @@ from tkinter import messagebox
 
 
 class DeviceSession:
-    def __init__(self, root, disconnected=lambda: None):
+    def __init__(self, root, disconnected=lambda: None, on_event=lambda event: None):
         self.root, self.disconnected = root, disconnected
+        self.on_event = on_event
         self.events = queue.Queue()
         self.closed = threading.Event()
         self.backend = None
         self.pending = False
+        self.request_generation = None
+        self.queued = None
+        self.prepare_cancel = threading.Event()
         self.generation = 0
         self.last = None
         self.prepared_id = None
@@ -31,11 +35,16 @@ class DeviceSession:
         if self.closed.is_set():
             return
         if self.pending:
+            if self.request_generation != self.generation:
+                self.queued = (callback, failed)
+                return
             failed()
             messagebox.showinfo('連線準備中', '前一個連線檢查尚未結束，請稍候再試。', parent=self.root)
             return
         self.pending = True
         generation = self.generation
+        self.request_generation = generation
+        self.prepare_cancel = threading.Event()
         def work():
             from .device_backend import DeviceBackend, device_ids, tunnels
             try:
@@ -48,18 +57,23 @@ class DeviceSession:
                     ready = False
                 if not ready or self.prepared_id != ids[0]:
                     if self.backend is None:
-                        self.backend = DeviceBackend(self.closed)
+                        self.backend = DeviceBackend(self.prepare_cancel)
+                    else:
+                        self.backend.cancel = self.prepare_cancel
                     if not self.backend.connect():
                         raise RuntimeError('裝置連線已取消。')
-                self.prepared_id = ids[0]
-                self.events.put(('ready', (generation, callback, failed, None)))
+                if device_ids() != ids:
+                    raise RuntimeError('準備期間裝置已變更，請重新開始。')
+                self.events.put(('ready', (generation, callback, failed, None, ids[0])))
             except Exception as exc:
-                self.events.put(('ready', (generation, callback, failed, str(exc))))
+                self.events.put(('ready', (generation, callback, failed, str(exc), None)))
         self.worker = threading.Thread(target=work)
         self.worker.start()
 
     def cancel_pending(self):
         self.generation += 1
+        self.queued = None
+        self.prepare_cancel.set()
 
     def poll(self):
         if self.closed.is_set():
@@ -76,15 +90,20 @@ class DeviceSession:
                                         '裝置已斷開，或目前連接多台裝置。', parent=self.root)
                 self.last = value
             else:
-                generation, callback, failed, error = value
+                generation, callback, failed, error, identifier = value
                 self.pending = False
                 if generation != self.generation:
-                    failed()
+                    # A cancelled request must never cancel a newer search.
+                    queued, self.queued = self.queued, None
+                    if queued:
+                        self.ensure(*queued)
                     continue
                 if error:
                     failed()
                     messagebox.showerror('裝置尚未就緒', error, parent=self.root)
                 else:
+                    self.prepared_id = identifier
+                    self.last = (identifier,)
                     callback()
         if self.backend:
             # Keep the original diagnostic output available in the parent launcher.
@@ -92,6 +111,9 @@ class DeviceSession:
                 kind, text = self.backend.events.get_nowait()
                 if kind == 'log':
                     print(text, flush=True)
+                    self.on_event(dict(kind='log', text=text))
+                elif kind == 'status' and self.pending and self.request_generation == self.generation:
+                    self.on_event(dict(kind='status', text=text))
         self.root.after(200, self.poll)
 
     def close(self):

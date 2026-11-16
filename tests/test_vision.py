@@ -3,7 +3,7 @@ import tempfile
 import unittest
 import cv2
 import numpy as np
-from pikmin.vision import load_templates, match_image, _load_templates, check_image_has_target
+from pikmin.vision import load_templates, match_image, check_image_has_target
 
 
 def paste(image, template, x, y):

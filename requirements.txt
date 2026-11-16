@@ -1,8 +1,8 @@
 # Direct runtime dependencies, pinned to the versions used by this project.
 # Python 3.11 (64-bit); tkinter is included with the official Windows installer.
-pymobiledevice3==9.32.0
-# pymobiledevice3 9.32 uses the pre-0.8 csfield API (AfcHeader).
-construct-typing==0.7.0
+# Includes the stable RSD host identity fix required by iOS/iPadOS 27.2.
+pymobiledevice3==11.15.5
+construct-typing==0.8.1
 tkintermapview==1.30
 Pillow==12.2.0
 opencv-python==4.13.0.92

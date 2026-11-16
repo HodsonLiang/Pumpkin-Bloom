@@ -27,7 +27,7 @@
 - `target_bookmarks.json`：依截圖檔名記錄的星號書籤。
 - `launcher_settings.json`：啟動器設定。
 - `data/runtime/`：啟動器通知子視窗正常關閉的暫存信號。
-- `local_archive/legacy-data-20261008/`：本次整理保留的舊城市 CSV、印度資料及原始 TXT；有內容的 TXT 已另外轉入座標庫。
+- `local_archive/`：本機舊資料封存，不參與程式執行；刪除前請先確認是否仍需保留。
 
 本機資料排除 Git，原始碼打包使用白名單，不包含快取、封存資料或個人座標與圖片。原本的 `worldcities.csv` 及 `india_villages` 不再參與生成流程。
 

@@ -9,20 +9,18 @@ import subprocess
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-from pikmin.storage import WAYPOINTS, write_json, read_points as read_waypoints
+from pikmin.storage import WAYPOINTS, write_json
 from pikmin.waypoint_picker import WaypointPicker
 from pikmin.country_picker import CountryPicker
 from pikmin.geoapify import KINDS, country_codes
 from tkinter.scrolledtext import ScrolledText
+from pikmin.device_backend import ProcessRunner, device_ids, kill_tree
 
 BASE = Path(__file__).resolve().parent
 SETTINGS = BASE / 'launcher_settings.json'
 
 
-from pikmin.device_backend import DeviceBackend, device_ids, kill_tree
-
-
-class Launcher(DeviceBackend):
+class Launcher(ProcessRunner):
     def __init__(self, root):
         self.root = root
         self.events = queue.Queue()

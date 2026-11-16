@@ -6,5 +6,5 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-echo Setup complete. Double-click Start.bat to launch.
+echo Setup complete. Double-click Start.bat to launch. Restart any old Pikmin windows.
 pause

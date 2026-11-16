@@ -54,7 +54,7 @@ class ScanDevice(Device):
     def capture(self, path):
         self.check()
         try:
-            subprocess.run([sys.executable, '-m', 'pikmin.device_cli', 'developer', 'dvt', 'screenshot', str(path)],
+            subprocess.run([sys.executable, '-m', 'pikmin.device_cli', 'developer', 'dvt', 'screenshot', *self.device_options(), str(path)],
                            check=True, capture_output=True, timeout=15, creationflags=self.flags)
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(exc.stderr.decode('utf-8', errors='replace')[-600:] or '截圖失敗') from exc
@@ -209,6 +209,7 @@ class Scanner(threading.Thread):
                     self.errors += 1
                     self.emit('log', text=f'第 {index} 點截圖失敗：{exc}')
                     self.emit('capture_error', index=index, errors=self.errors)
+                    raise RuntimeError(f'第 {index} 點截圖未完成，保留此點供繼續搜尋：{exc}') from exc
                 self.next_index = index+1
                 self.emit('progress', completed=offset+1, total=len(self.points), next_index=self.next_index, captured=self.captured)
                 if offset+1 < len(self.points) and not self.wait(max(0, self.config['interval']-(time.monotonic()-start))):

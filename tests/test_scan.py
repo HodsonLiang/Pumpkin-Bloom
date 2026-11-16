@@ -95,9 +95,10 @@ class ScanTests(unittest.TestCase):
         scanner = self.scanner()
         self.device.capture.side_effect = OSError('screenshot failed')
         scanner.run()
-        self.assertEqual(scanner.errors, 2)
+        self.assertEqual(scanner.errors, 1)
         self.assertEqual(scanner.captured, 0)
         self.assertEqual(scanner.processed, 0)
+        self.assertEqual(scanner.next_index, 1)
         self.assertEqual(list(self.events.queue)[-1]['kind'], 'done')
 
     def test_recognition_failure_retains_capture(self):

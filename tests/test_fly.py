@@ -1,6 +1,6 @@
 import queue
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 from pikmin.fly_engine import Route, Controller, distance, advance
 
 
